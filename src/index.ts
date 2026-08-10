@@ -287,7 +287,12 @@ const Owencode = (async (_input, rawOptions) => {
           timeout: tool.schema.number().int().positive().optional().describe("Timeout in milliseconds"),
         },
         async execute(args, ctx) {
-          const commandArgs = parseGhCommand(args.command)
+          const legacyArgs = (args as unknown as { args?: unknown }).args
+          const commandArgs = typeof args.command === "string"
+            ? parseGhCommand(args.command)
+            : Array.isArray(legacyArgs) && legacyArgs.every((value) => typeof value === "string")
+              ? legacyArgs
+              : (() => { throw new Error("gh requires a command string") })()
           const command = renderGhCommand(commandArgs)
           await ctx.ask({
             permission: "gh",

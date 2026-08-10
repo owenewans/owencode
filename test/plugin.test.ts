@@ -58,5 +58,11 @@ describe("plugin", () => {
       patterns: ["gh --repo owner/repo pr merge 1"],
       always: ["gh --repo owner/repo pr merge 1"],
     })
+
+    await hooks.tool?.gh.execute({ args: ["repo", "view", "owner/repo"] } as never, context)
+    expect(approvals[2]).toMatchObject({
+      permission: "gh",
+      patterns: ["gh repo view owner/repo"],
+    })
   })
 })
