@@ -6,10 +6,10 @@ native ssh counterparts for opencode tools. local opencode, remote files and com
 
 <a href="https://count.owenewans.org/owenewans/sshopencode?theme=moebooru-h&notitle"><img src="https://count.owenewans.org/owenewans/sshopencode?theme=moebooru-h&notitle" alt="repository views"></a>
 
-</div>
+`node` `opencode` `ssh` 
 
-stack       typescript / opencode plugin api / openssh
-license     gpl-3.0-or-later
+
+</div>
 
 tools:
 - `ssh_read` - read files and list directories
@@ -63,8 +63,6 @@ add the built plugin to `~/.config/opencode/opencode.json`:
 
 `host` is an alias from `~/.ssh/config`. `root` is an absolute directory on that host. structured file-tool paths and the initial `ssh_bash` working directory are confined to `root`. an approved `ssh_bash` command still has every permission of the remote ssh account and is not a sandbox.
 
-permissions use native opencode approvals. each remote tool has its own permission namespace, so allowing local `bash` never allows `ssh_bash` by accident.
-
 options:
 ```json
 {
@@ -86,8 +84,3 @@ npm run build
 session tools such as `task`, `question` and `todowrite` stay local because they orchestrate opencode itself rather than a filesystem. remote lsp is intentionally not emulated; run opencode on the remote host when the language server must be remote.
 
 `ssh_apply_patch` validates every file before writing, but a multi-file patch is not a filesystem transaction. if the connection or remote disk fails during commit, already written files remain changed and the tool reports the failure.
-
----
-author      [owenewans.org](https://owenewans.org)
-email       [owenewans@owenewans.org](mailto:owenewans@owenewans.org)
-tg          [t.me/owenewans](https://t.me/owenewans)
