@@ -2,7 +2,7 @@ import path from "node:path"
 import { createTwoFilesPatch } from "diff"
 import { tool, type Plugin, type ToolContext } from "@opencode-ai/plugin"
 import { parseOptions, remotePath } from "./config.js"
-import { renderGhCommand, runGh, validateGhArgs } from "./github.js"
+import { parseGhCommand, renderGhCommand, runGh } from "./github.js"
 import { applyChunks, parsePatch, type PatchOperation } from "./patch.js"
 import { sha256, SshClient } from "./ssh.js"
 
@@ -280,16 +280,15 @@ const Owencode = (async (_input, rawOptions) => {
       }),
 
       gh: tool({
-        description: "Run GitHub CLI commands using the local authenticated gh installation. Pass arguments without the leading gh. Supports repo, pr, issue, release, api, search, run, workflow and other gh commands. gh auth token is blocked.",
+        description: "Run GitHub CLI commands using the local authenticated gh installation. Pass a command string without the leading gh. The string is parsed into an argument array and never executed through a shell. Supports repo, pr, issue, release, api, search, run, workflow and other gh commands. Token disclosure is blocked.",
         args: {
-          args: tool.schema.array(tool.schema.string()).min(1).describe("GitHub CLI arguments, for example [\"repo\", \"view\", \"owner/repo\", \"--json\", \"name\"]"),
+          command: tool.schema.string().min(1).describe("GitHub CLI command without the leading gh, for example: repo view owner/repo --json name"),
           stdin: tool.schema.string().optional().describe("Optional standard input for commands such as gh api --input -"),
           timeout: tool.schema.number().int().positive().optional().describe("Timeout in milliseconds"),
         },
         async execute(args, ctx) {
-          validateGhArgs(args.args)
-          const command = renderGhCommand(args.args)
-          ctx.metadata({ title: command, metadata: { command } })
+          const commandArgs = parseGhCommand(args.command)
+          const command = renderGhCommand(commandArgs)
           await ctx.ask({
             permission: "gh",
             patterns: [command],
@@ -298,7 +297,7 @@ const Owencode = (async (_input, rawOptions) => {
           })
           const result = await runGh({
             binary: ghBinary,
-            args: args.args,
+            args: commandArgs,
             cwd: ctx.directory,
             stdin: args.stdin,
             signal: ctx.abort,

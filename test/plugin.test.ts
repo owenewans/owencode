@@ -17,7 +17,6 @@ describe("plugin", () => {
     directories.push(root)
     await writeFile(path.join(root, "file.txt"), "hello\n")
     const approvals: Array<{ permission: string; patterns: string[]; always: string[] }> = []
-    const metadata: Array<{ title?: string; metadata?: Record<string, unknown> }> = []
     const hooks = await Owencode({} as never, {
       host: "ignored",
       root,
@@ -32,9 +31,7 @@ describe("plugin", () => {
       directory: root,
       worktree: root,
       abort: new AbortController().signal,
-      metadata(value: { title?: string; metadata?: Record<string, unknown> }) {
-        metadata.push(value)
-      },
+      metadata() {},
       async ask(request: { permission: string; patterns: string[]; always: string[] }) {
         approvals.push(request)
       },
@@ -55,15 +52,11 @@ describe("plugin", () => {
     expect(approvals).toHaveLength(1)
     expect(approvals[0]).toMatchObject({ permission: "ssh_read", patterns: ["ignored:file.txt"] })
 
-    await hooks.tool?.gh.execute({ args: ["--repo", "owner/repo", "pr", "merge", "1"] }, context)
+    await hooks.tool?.gh.execute({ command: "--repo owner/repo pr merge 1" }, context)
     expect(approvals[1]).toMatchObject({
       permission: "gh",
       patterns: ["gh --repo owner/repo pr merge 1"],
       always: ["gh --repo owner/repo pr merge 1"],
-    })
-    expect(metadata).toContainEqual({
-      title: "gh --repo owner/repo pr merge 1",
-      metadata: { command: "gh --repo owner/repo pr merge 1" },
     })
   })
 })

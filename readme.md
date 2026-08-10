@@ -21,7 +21,7 @@ ssh tools:
 - `ssh_apply_patch` - add, update, move and delete files with opencode patches
 
 github tools:
-- `gh` - run github cli commands with structured arguments and native approvals
+- `gh` - run parsed github cli command strings with native approvals and no shell
 
 browser mcp:
 - persistent anti-detect Camoufox profile

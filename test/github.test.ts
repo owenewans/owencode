@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { renderGhCommand, runGh, validateGhArgs } from "../src/github.js"
+import { parseGhCommand, renderGhCommand, runGh, validateGhArgs } from "../src/github.js"
 
 describe("github cli", () => {
   it("renders approval commands without executing a shell", () => {
@@ -13,6 +13,20 @@ describe("github cli", () => {
     expect(() => validateGhArgs(["auth", "status", "--show-token"])).toThrow("tokens")
     expect(() => validateGhArgs(["auth", "status", "-t"])).toThrow("tokens")
     expect(() => validateGhArgs(["repo", "view\nwhoami"])).toThrow("control characters")
+  })
+
+  it("parses quoted command strings without invoking a shell", () => {
+    expect(parseGhCommand(`repo view owner/repo --json "name description" --jq '.name'`)).toEqual([
+      "repo",
+      "view",
+      "owner/repo",
+      "--json",
+      "name description",
+      "--jq",
+      ".name",
+    ])
+    expect(() => parseGhCommand("gh repo view owner/repo")).toThrow("without the leading gh")
+    expect(() => parseGhCommand("repo view 'owner/repo")).toThrow("unterminated")
   })
 
   it("executes argument arrays and captures output", async () => {
