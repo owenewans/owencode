@@ -1,0 +1,48 @@
+{
+  "name": "sshopencode",
+  "version": "0.1.0",
+  "description": "native ssh counterparts for opencode tools",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "readme.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "opencode",
+    "ssh",
+    "plugin",
+    "remote-development"
+  ],
+  "author": "owenewans <owenewans@owenewans.org>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/owenewans/sshopencode.git"
+  },
+  "homepage": "https://github.com/owenewans/sshopencode#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.18.16",
+    "diff": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}
