@@ -48,6 +48,7 @@ describe("plugin", () => {
       "ssh_edit",
       "ssh_apply_patch",
       "gh",
+      "web_search",
     ])
     const result = await hooks.tool?.ssh_read.execute({ filePath: "file.txt" }, context)
     expect(result).toMatchObject({ output: "1: hello" })

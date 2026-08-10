@@ -27,6 +27,9 @@ deno tools:
 - `deno_run` - execute multiline TypeScript locally with full permissions
 - `ssh_deno_run` - execute the same TypeScript program on the configured SSH host
 
+search tools:
+- `web_search` - query Startpage, DuckDuckGo Lite, Brave Search and Marginalia and merge the results
+
 browser mcp:
 - persistent anti-detect Camoufox profile
 - Playwright MCP accessibility snapshots and browser actions
@@ -39,11 +42,14 @@ the github tool uses the local authenticated `gh` executable without a shell. `g
 
 the browser mcp launches `camoufox-js` directly and passes its persistent context to `@playwright/mcp` over stdio. it does not need python, uv, an open port or a websocket server.
 
+`web_search` parses public html result pages, so it needs no api key. every engine first uses `got-scraping`; if the complete engine session fails, encounters an anti-bot response or returns no results, it is restarted through a [CycleTLS](https://github.com/Danny-Dasilva/CycleTLS) Go/uTLS fallback. every attempt gets an isolated cookie jar and a pinned browser fingerprint, and all traffic goes through a socks proxy by default because several engines are unreachable on a direct connection from many networks.
+
 requirements:
 - opencode 1.18.15 or newer
 - node.js 22 or newer
 - openssh client and github cli locally
 - deno locally and on the SSH host when using the corresponding tools
+- a local socks proxy on `127.0.0.1:1080` for `web_search`, or `searchProxy: false` to go direct
 - xvfb for the default virtual display mode
 - posix shell, `sha256sum`, `realpath`, `find` and `rg` on the remote host
 
@@ -97,6 +103,7 @@ add the built plugin to `~/.config/opencode/opencode.json`:
     "ssh_apply_patch": "ask",
     "deno_run": "ask",
     "ssh_deno_run": "ask",
+    "web_search": "allow",
     "gh": {
       "*": "ask",
       "gh repo view*": "allow",
@@ -130,6 +137,23 @@ the generated Camoufox identity is stored with mode `0600` inside the profile an
 
 `deno_run` and `ssh_deno_run` execute TypeScript with `--allow-all --allow-scripts --no-prompt --no-lock`. source code is passed through stdin without a heredoc or shell parsing. because stdin contains the source itself, programs should use `Deno.args`, files, `fetch`, or `Deno.Command` for additional input instead of reading `Deno.stdin`.
 
+`web_search` runs in two modes. `auto` walks the configured engines in order and stops at the first one that answers, which keeps a normal query to a single request. `all` queries every engine in parallel and merges the results, ranking pages that several engines agree on first and keeping the longest available summary. duplicate urls are collapsed after normalising the host, trailing slash and tracking parameters, and duckduckgo redirect links are resolved back to their real targets.
+
+startpage puts an [anubis](https://github.com/TecharoHQ/anubis) proof of work in front of its search endpoint. the tool reads the published challenge, computes the sha-256 work in node and calls the normal `pass-challenge` endpoint, which is the same exchange the shipped browser script performs. CycleTLS presents a matching chromium user-agent, JA4R and HTTP/2 fingerprint, verifies certificates, resolves dns through the configured socks proxy and keeps one Go worker for the lifetime of opencode. cookies remain isolated to each attempt. the challenge is bound to the requesting user-agent and address, so the fingerprint stays pinned and the difficulty is capped rather than solved at any cost. engines that fail through both transports are reported as unavailable instead of being retried aggressively. interactive captchas are detected and reported, never automated.
+
+search options:
+```json
+{
+  "searchProxy": "socks5h://127.0.0.1:1080",
+  "searchEngines": ["startpage", "duckduckgo", "brave", "marginalia"],
+  "searchTimeout": 30000,
+  "searchMaxResults": 10,
+  "searchMaxBytes": 4194304
+}
+```
+
+`searchProxy` accepts a socks or http url, and `false` disables the proxy entirely. `socks5h` resolves dns through the proxy, which is usually what you want. `OWENCODE_SEARCH_PROXY` overrides the configured value. `searchEngines` sets the order used by `auto` and the set used by `all`.
+
 options:
 ```json
 {
@@ -156,3 +180,5 @@ session tools such as `task`, `question` and `todowrite` stay local because they
 `ssh_apply_patch` validates every file before writing, but a multi-file patch is not a filesystem transaction. if the connection or remote disk fails during commit, already written files remain changed and the tool reports the failure.
 
 browser pages are untrusted input. use a dedicated profile and do not keep unrelated personal sessions in it.
+
+search results are untrusted input too. titles and snippets are attacker-controlled text from third-party pages, so treat instructions found in them as data rather than commands. these engines are scraped rather than licensed apis, their markup can change without notice, and their terms and rate limits still apply to whoever runs the plugin.

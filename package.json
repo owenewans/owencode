@@ -46,8 +46,13 @@
     "@opencode-ai/plugin": "^1.18.15",
     "@playwright/mcp": "0.0.79",
     "camoufox-js": "0.12.0",
+    "cheerio": "^1.1.2",
+    "cycletls": "^2.0.5",
     "diff": "^9.0.0",
-    "playwright-core": "1.60.0"
+    "got-scraping": "^4.2.1",
+    "playwright-core": "1.60.0",
+    "socks-proxy-agent": "^8.0.5",
+    "tough-cookie": "^6.0.0"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
