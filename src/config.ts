@@ -10,6 +10,8 @@ export type Options = {
   controlMaster: boolean
   controlPersist: string
   maxSessions: number
+  allowSensitivePaths: boolean
+  unconfined: boolean
 }
 
 export function parseOptions(input: Record<string, unknown> | undefined): Options {
@@ -22,6 +24,8 @@ export function parseOptions(input: Record<string, unknown> | undefined): Option
   const controlMaster = input?.controlMaster ?? true
   const controlPersist = input?.controlPersist ?? "60s"
   const maxSessions = input?.maxSessions ?? 8
+  const allowSensitivePaths = input?.allowSensitivePaths ?? false
+  const unconfined = input?.unconfined ?? false
 
   if (typeof host !== "string" || host.length === 0) throw new Error("owencode: host is required")
   if (/[\0\r\n]/.test(host)) throw new Error("owencode: host contains a forbidden control character")
@@ -51,6 +55,17 @@ export function parseOptions(input: Record<string, unknown> | undefined): Option
   if (!Number.isSafeInteger(maxSessions) || Number(maxSessions) < 1 || Number(maxSessions) > 10) {
     throw new Error("owencode: maxSessions must be an integer between 1 and 10")
   }
+  if (typeof allowSensitivePaths !== "boolean") throw new Error("owencode: allowSensitivePaths must be a boolean")
+  if (typeof unconfined !== "boolean") throw new Error("owencode: unconfined must be a boolean")
+  // Confining to "/" is a contradiction, so every path guard short-circuits and
+  // the structured tools reach the whole filesystem. That can be a deliberate
+  // choice, but it must never be an accidental one.
+  if (path.posix.normalize(root) === "/" && !unconfined) {
+    throw new Error(
+      'owencode: root "/" disables every path guard. Set an actual project directory as root, ' +
+        "or set unconfined to true to accept that the remote tools reach the whole filesystem.",
+    )
+  }
 
   return {
     host,
@@ -62,6 +77,8 @@ export function parseOptions(input: Record<string, unknown> | undefined): Option
     controlMaster,
     controlPersist,
     maxSessions: Number(maxSessions),
+    allowSensitivePaths,
+    unconfined,
   }
 }
 

@@ -156,7 +156,11 @@ the generated Camoufox identity is stored with mode `0600` inside the profile an
 
 `controlMaster` turns multiplexing off when set to `false`, which is worth doing if the remote sshd forbids it or you are debugging a connection. `maxSessions` must stay at or below the server's `MaxSessions`.
 
-setting `root` to `/` asks for no path confinement at all, and the guards are written to skip in that case because confining to `/` is a contradiction. that is a legitimate choice for a dedicated host, but it does mean the structured file tools reach the whole filesystem, so it should be a deliberate decision rather than a default.
+setting `root` to `/` asks for no path confinement at all, and the guards are written to skip in that case because confining to `/` is a contradiction. that is a legitimate choice for a dedicated host, but it must be stated: the plugin refuses to load with `root: "/"` unless `unconfined` is also `true`, so a config can never disable the plugin's own guarantees silently.
+
+independently of `root`, the structured tools refuse paths that exist only to hold credentials: anything under `.ssh` or `.gnupg`, `authorized_keys`, private key files, `/etc/shadow`, `/etc/gshadow`, `/etc/sudoers` and `sudoers.d`, `.aws/credentials`, `.config/gh/hosts.yml`, `.docker/config.json`, `.kube/config`, `.git-credentials`, `.netrc`, `.pgpass`, `.npmrc`, and `.env` files. `.env.example`, `.env.sample` and `.env.template` stay readable because they hold no secrets. this applies to `ssh_read`, `ssh_write`, `ssh_edit`, `ssh_apply_patch` and both directions of `ssh_transfer`, and `ssh_glob` and `ssh_grep` pass the same list to ripgrep as exclusions so a recursive search cannot surface key material it was not asked for. `allowSensitivePaths: true` turns it off when the task genuinely is credential management.
+
+this is a blast-radius control, not a sandbox. it exists because the model reads untrusted text from `web_search`, `webfetch` and browser pages, and a path denylist is one of the few defences that survives an injected instruction. `ssh_bash` is not covered: an approved shell command can read anything the remote account can.
 
 `host` is an alias from `~/.ssh/config`. `root` is an absolute directory on that host. structured file-tool paths and the initial `ssh_bash` working directory are confined to `root`. an approved `ssh_bash` command still has every permission of the remote ssh account and is not a sandbox.
 
@@ -201,7 +205,9 @@ options:
   "maxTransferBytes": 268435456,
   "controlMaster": true,
   "controlPersist": "60s",
-  "maxSessions": 8
+  "maxSessions": 8,
+  "allowSensitivePaths": false,
+  "unconfined": false
 }
 ```
 

@@ -7,7 +7,8 @@ import { parseGitCommand, renderGitCommand, runGit } from "./git.js"
 import { parseGhCommand, renderGhCommand, runGh } from "./github.js"
 import { applyChunks, parsePatch, type PatchOperation } from "./patch.js"
 import { ENGINE_NAMES, redactProxy, renderReport, resolveSearchSettings, webSearch, type EngineName } from "./search/index.js"
-import { sha256, SshClient } from "./ssh.js"
+import { assertNotSensitive, sensitiveGlobs } from "./sensitive.js"
+import { sha256, shellQuote, SshClient } from "./ssh.js"
 import { localTransferPath, transfer, type TransferTransport } from "./transfer.js"
 import { describeTunnel, isLoopback, TunnelManager } from "./tunnel.js"
 
@@ -74,6 +75,15 @@ const Owencode = (async (_input, rawOptions) => {
   const tunnels = new TunnelManager({ sshBinary: options.sshBinary, sshArgs: options.sshArgs, host: options.host })
   const scoped = (value: string) => remotePath(options.root, value)
   const permissionPath = (value: string) => `${options.host}:${display(options.root, value)}`
+  const guardSensitive = (value: string, action: string) => {
+    assertNotSensitive(value, action, options.allowSensitivePaths)
+    return value
+  }
+  const excludeGlobs = options.allowSensitivePaths
+    ? ""
+    : sensitiveGlobs()
+        .map((glob) => `-g ${shellQuote(glob)}`)
+        .join(" ")
 
   return {
     tool: {
@@ -85,7 +95,7 @@ const Owencode = (async (_input, rawOptions) => {
           limit: tool.schema.number().int().positive().optional().describe("Maximum number of lines, default 2000"),
         },
         async execute(args, ctx) {
-          const filePath = scoped(args.filePath)
+          const filePath = guardSensitive(scoped(args.filePath), "ssh_read")
           await approve(ctx, "ssh_read", permissionPath(filePath), { host: options.host, filePath })
           const result = await ssh.script(
             [
@@ -135,7 +145,7 @@ const Owencode = (async (_input, rawOptions) => {
             'root=$(realpath -m -- "$1")',
             'target=$(realpath -m -- "$2")',
             'case "$root" in /) ;; *) case "$target" in "$root"|"$root"/*) ;; *) exit 77;; esac;; esac',
-            'cd -- "$2" && command rg --files --hidden -g "$3" -g "!.git" | LC_ALL=C sort',
+            `cd -- "$2" && command rg --files --hidden -g "$3" -g '!.git' ${excludeGlobs} | LC_ALL=C sort`,
           ].join("\n")
           const result = await ssh.script(script, [options.root, base, args.pattern], { signal: ctx.abort })
           if (result.exitCode > 1) throw new Error(result.stderr.trim() || "remote glob failed")
@@ -165,8 +175,8 @@ const Owencode = (async (_input, rawOptions) => {
             'root=$(realpath -m -- "$1")',
             'target=$(realpath -m -- "$2")',
             'case "$root" in /) ;; *) case "$target" in "$root"|"$root"/*) ;; *) exit 77;; esac;; esac',
-            'if [ -n "$4" ]; then command rg --line-number --no-heading --color never --hidden -g "!.git" -g "$4" -- "$3" "$2"',
-            'else command rg --line-number --no-heading --color never --hidden -g "!.git" -- "$3" "$2"; fi',
+            `if [ -n "$4" ]; then command rg --line-number --no-heading --color never --hidden -g '!.git' ${excludeGlobs} -g "$4" -- "$3" "$2"`,
+            `else command rg --line-number --no-heading --color never --hidden -g '!.git' ${excludeGlobs} -- "$3" "$2"; fi`,
           ].join("\n")
           const result = await ssh.script(script, [options.root, target, args.pattern, args.include ?? ""], { signal: ctx.abort })
           if (result.exitCode > 1) throw new Error(result.stderr.trim() || "remote grep failed")
@@ -283,7 +293,7 @@ const Owencode = (async (_input, rawOptions) => {
           content: tool.schema.string().describe("Complete file content"),
         },
         async execute(args, ctx) {
-          const filePath = scoped(args.filePath)
+          const filePath = guardSensitive(scoped(args.filePath), "ssh_write")
           await ssh.guardPath(options.root, filePath, ctx.abort)
           let oldContent = ""
           let expected = "missing"
@@ -310,7 +320,7 @@ const Owencode = (async (_input, rawOptions) => {
         },
         async execute(args, ctx) {
           if (args.oldString === args.newString) throw new Error("oldString and newString are identical")
-          const filePath = scoped(args.filePath)
+          const filePath = guardSensitive(scoped(args.filePath), "ssh_edit")
           await ssh.guardPath(options.root, filePath, ctx.abort)
           const oldContent = await ssh.textFile(filePath, ctx.abort)
           const count = oldContent.split(args.oldString).length - 1
@@ -336,7 +346,7 @@ const Owencode = (async (_input, rawOptions) => {
           const changes: Change[] = []
           const touched = new Set<string>()
           for (const operation of operations) {
-            const sourcePath = scoped(operation.path)
+            const sourcePath = guardSensitive(scoped(operation.path), "ssh_apply_patch")
             await ssh.guardPath(options.root, sourcePath, ctx.abort)
             const operationPaths = [sourcePath]
             if (operation.type === "update" && operation.movePath) operationPaths.push(scoped(operation.movePath))
@@ -353,7 +363,7 @@ const Owencode = (async (_input, rawOptions) => {
               changes.push({ operation, sourcePath, targetPath: sourcePath, oldContent, newContent: "", expectedHash: sha256(oldContent) })
               continue
             }
-            const targetPath = operation.movePath ? scoped(operation.movePath) : sourcePath
+            const targetPath = operation.movePath ? guardSensitive(scoped(operation.movePath), "ssh_apply_patch") : sourcePath
             await ssh.guardPath(options.root, targetPath, ctx.abort)
             changes.push({
               operation,
@@ -401,8 +411,8 @@ const Owencode = (async (_input, rawOptions) => {
           timeout: tool.schema.number().int().positive().optional().describe("Timeout in milliseconds"),
         },
         async execute(args, ctx) {
-          const localPath = localTransferPath(ctx.directory, args.localPath)
-          const remoteTarget = scoped(args.remotePath)
+          const localPath = guardSensitive(localTransferPath(ctx.directory, args.localPath), "ssh_transfer")
+          const remoteTarget = guardSensitive(scoped(args.remotePath), "ssh_transfer")
           await ssh.guardPath(options.root, remoteTarget, ctx.abort)
           const recursive = args.recursive ?? false
           const overwrite = args.overwrite ?? false
