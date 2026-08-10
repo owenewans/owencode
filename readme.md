@@ -1,17 +1,17 @@
 <div align="center">
 
-# sshopencode
+# owencode
 
-native ssh counterparts for opencode tools. local opencode, remote files and commands.
+opencode extensions by owenewans. local tools, remote machines and github.
 
-<a href="https://count.owenewans.org/owenewans/sshopencode?theme=moebooru-h&notitle"><img src="https://count.owenewans.org/owenewans/sshopencode?theme=moebooru-h&notitle" alt="repository views"></a>
+<a href="https://count.owenewans.org/owenewans/owencode?theme=moebooru-h&notitle"><img src="https://count.owenewans.org/owenewans/owencode?theme=moebooru-h&notitle" alt="repository views"></a>
 
-`node` `opencode` `ssh` 
+`node` `opencode` `ssh` `github`
 
 
 </div>
 
-tools:
+ssh tools:
 - `ssh_read` - read files and list directories
 - `ssh_glob` - find files with remote ripgrep
 - `ssh_grep` - search file contents with remote ripgrep
@@ -20,18 +20,23 @@ tools:
 - `ssh_edit` - atomically replace exact text
 - `ssh_apply_patch` - add, update, move and delete files with opencode patches
 
+github tools:
+- `gh` - run github cli commands with structured arguments and native approvals
+
 the plugin uses the system `ssh` executable. `~/.ssh/config`, ssh-agent, `IdentityFile`, `ProxyJump`, `known_hosts` and control connections work without a second configuration format.
 
+the github tool uses the local authenticated `gh` executable without a shell. `gh auth token` is blocked so credentials cannot be printed into model context.
+
 requirements:
-- opencode 1.18.16 or newer
+- opencode 1.18.15 or newer
 - node.js 20 or newer for building
-- openssh client locally
+- openssh client and github cli locally
 - posix shell, `sha256sum`, `realpath`, `find` and `rg` on the remote host
 
 install from source:
 ```sh
-git clone https://github.com/owenewans/sshopencode
-cd sshopencode
+git clone https://github.com/owenewans/owencode
+cd owencode
 npm install
 npm run build
 ```
@@ -42,10 +47,11 @@ add the built plugin to `~/.config/opencode/opencode.json`:
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "file:///absolute/path/to/sshopencode/dist/index.js",
+      "file:///absolute/path/to/owencode/dist/index.js",
       {
         "host": "dev",
-        "root": "/srv/project"
+        "root": "/srv/project",
+        "ghBinary": "/usr/bin/gh"
       }
     ]
   ],
@@ -56,7 +62,19 @@ add the built plugin to `~/.config/opencode/opencode.json`:
     "ssh_bash": "ask",
     "ssh_write": "ask",
     "ssh_edit": "ask",
-    "ssh_apply_patch": "ask"
+    "ssh_apply_patch": "ask",
+    "gh": {
+      "*": "ask",
+      "gh repo view*": "allow",
+      "gh pr view*": "allow",
+      "gh pr list*": "allow",
+      "gh issue view*": "allow",
+      "gh issue list*": "allow",
+      "gh release view*": "allow",
+      "gh release list*": "allow",
+      "gh search *": "allow",
+      "gh status*": "allow"
+    }
   }
 }
 ```
@@ -70,6 +88,7 @@ options:
   "root": "/srv/project",
   "sshBinary": "ssh",
   "sshArgs": ["-o", "ConnectTimeout=10"],
+  "ghBinary": "gh",
   "maxOutputBytes": 2097152
 }
 ```

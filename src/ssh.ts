@@ -117,7 +117,7 @@ export class SshClient {
 
   async writeFile(filePath: string, content: string, expectedHash: string | undefined, signal?: AbortSignal) {
     const parent = path.posix.dirname(filePath)
-    const temporary = `${filePath}.sshopencode-${process.pid}-${randomBytes(6).toString("hex")}`
+    const temporary = `${filePath}.owencode-${process.pid}-${randomBytes(6).toString("hex")}`
     const expected = expectedHash ?? "-"
     const script = [
       "set -eu",

@@ -1,7 +1,7 @@
 {
-  "name": "sshopencode",
+  "name": "owencode",
   "version": "0.1.0",
-  "description": "native ssh counterparts for opencode tools",
+  "description": "opencode extensions by owenewans",
   "type": "module",
   "exports": {
     ".": {
@@ -23,6 +23,7 @@
   "keywords": [
     "opencode",
     "ssh",
+    "github",
     "plugin",
     "remote-development"
   ],
@@ -30,14 +31,14 @@
   "license": "GPL-3.0-or-later",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/owenewans/sshopencode.git"
+    "url": "git+https://github.com/owenewans/owencode.git"
   },
-  "homepage": "https://github.com/owenewans/sshopencode#readme",
+  "homepage": "https://github.com/owenewans/owencode#readme",
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "^1.18.16",
+    "@opencode-ai/plugin": "^1.18.15",
     "diff": "^9.0.0"
   },
   "devDependencies": {

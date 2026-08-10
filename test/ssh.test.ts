@@ -16,7 +16,7 @@ function localClient(root = "/"): SshClient {
     host: "ignored",
     root,
     sshBinary: "/bin/sh",
-    sshArgs: ["-c", 'exec /bin/sh -c "$2"', "sshopencode-test"],
+    sshArgs: ["-c", 'exec /bin/sh -c "$2"', "owencode-test"],
     maxOutputBytes: 1024 * 1024,
   }
   return new SshClient(options)
@@ -32,7 +32,7 @@ describe("ssh helpers", () => {
   })
 
   it("reads, atomically writes and deletes through the ssh transport", async () => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), "sshopencode-"))
+    const directory = await mkdtemp(path.join(os.tmpdir(), "owencode-"))
     directories.push(directory)
     const filePath = path.join(directory, "nested", "file.txt")
     const client = localClient()
@@ -47,7 +47,7 @@ describe("ssh helpers", () => {
   })
 
   it("passes script arguments without shell expansion", async () => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), "sshopencode-"))
+    const directory = await mkdtemp(path.join(os.tmpdir(), "owencode-"))
     directories.push(directory)
     const filePath = path.join(directory, "quote ' and space.txt")
     await writeFile(filePath, "safe")
@@ -58,7 +58,7 @@ describe("ssh helpers", () => {
   })
 
   it("rejects symlinks that resolve outside root in the same file operation", async () => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), "sshopencode-"))
+    const directory = await mkdtemp(path.join(os.tmpdir(), "owencode-"))
     directories.push(directory)
     await symlink("/etc/passwd", path.join(directory, "escape"))
 

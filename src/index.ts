@@ -2,8 +2,9 @@ import path from "node:path"
 import { createTwoFilesPatch } from "diff"
 import { tool, type Plugin, type ToolContext } from "@opencode-ai/plugin"
 import { parseOptions, remotePath } from "./config.js"
+import { renderGhCommand, runGh, validateGhArgs } from "./github.js"
 import { applyChunks, parsePatch, type PatchOperation } from "./patch.js"
-import { shellQuote, sha256, SshClient } from "./ssh.js"
+import { sha256, SshClient } from "./ssh.js"
 
 type Change = {
   operation: PatchOperation
@@ -26,8 +27,9 @@ async function approve(ctx: ToolContext, permission: string, pattern: string, me
   await ctx.ask({ permission, patterns: [pattern], always: [pattern], metadata })
 }
 
-const Sshopencode = (async (_input, rawOptions) => {
+const Owencode = (async (_input, rawOptions) => {
   const options = parseOptions(rawOptions)
+  const ghBinary = typeof rawOptions?.ghBinary === "string" ? rawOptions.ghBinary : "gh"
   const ssh = new SshClient(options)
   const scoped = (value: string) => remotePath(options.root, value)
   const permissionPath = (value: string) => `${options.host}:${display(options.root, value)}`
@@ -276,8 +278,38 @@ const Sshopencode = (async (_input, rawOptions) => {
           return { title: `${options.host}: patch applied`, output: `Success. Updated remote files:\n${summary}`, metadata: { diff: patches } }
         },
       }),
+
+      gh: tool({
+        description: "Run GitHub CLI commands using the local authenticated gh installation. Pass arguments without the leading gh. Supports repo, pr, issue, release, api, search, run, workflow and other gh commands. gh auth token is blocked.",
+        args: {
+          args: tool.schema.array(tool.schema.string()).min(1).describe("GitHub CLI arguments, for example [\"repo\", \"view\", \"owner/repo\", \"--json\", \"name\"]"),
+          stdin: tool.schema.string().optional().describe("Optional standard input for commands such as gh api --input -"),
+          timeout: tool.schema.number().int().positive().optional().describe("Timeout in milliseconds"),
+        },
+        async execute(args, ctx) {
+          validateGhArgs(args.args)
+          const command = renderGhCommand(args.args)
+          await ctx.ask({
+            permission: "gh",
+            patterns: [command],
+            always: [command],
+            metadata: { command, hasStdin: args.stdin !== undefined },
+          })
+          const result = await runGh({
+            binary: ghBinary,
+            args: args.args,
+            cwd: ctx.directory,
+            stdin: args.stdin,
+            signal: ctx.abort,
+            timeout: args.timeout,
+            maxOutputBytes: options.maxOutputBytes,
+          })
+          const output = [result.stdout.trimEnd(), result.stderr.trimEnd()].filter(Boolean).join("\n") || "(no output)"
+          return { title: command, output, metadata: { command, exitCode: result.exitCode } }
+        },
+      }),
     },
   }
 }) satisfies Plugin
 
-export default Sshopencode
+export default Owencode
