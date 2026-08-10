@@ -18,6 +18,10 @@ function localClient(root = "/"): SshClient {
     sshBinary: "/bin/sh",
     sshArgs: ["-c", 'exec /bin/sh -c "$2"', "owencode-test"],
     maxOutputBytes: 1024 * 1024,
+    maxTransferBytes: 1024 * 1024,
+    controlMaster: false,
+    controlPersist: "60s",
+    maxSessions: 8,
   }
   return new SshClient(options)
 }

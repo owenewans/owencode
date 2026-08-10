@@ -4,6 +4,7 @@ import { createReadStream, createWriteStream } from "node:fs"
 import { chmod, mkdir, rename, rm, stat } from "node:fs/promises"
 import path from "node:path"
 import type { Readable, Writable } from "node:stream"
+import { controlArgs, Semaphore, type MultiplexSettings } from "./multiplex.js"
 import { shellQuote } from "./ssh.js"
 
 export type TransferDirection = "upload" | "download"
@@ -15,6 +16,8 @@ export type TransferTransport = {
   root: string
   tarBinary: string
   maxTransferBytes: number
+  multiplex: MultiplexSettings
+  sessions: Semaphore
 }
 
 export type TransferRequest = {
@@ -108,13 +111,27 @@ function spawnTar(binary: string, args: string[], stdio: StdioOptions) {
   }
 }
 
-function sshStream(options: StreamOptions): Promise<StreamResult> {
+async function sshStream(options: StreamOptions): Promise<StreamResult> {
+  const release = await options.transport.sessions.acquire()
+  try {
+    return await spawnStream(options)
+  } finally {
+    release()
+  }
+}
+
+function spawnStream(options: StreamOptions): Promise<StreamResult> {
   return new Promise((resolve, reject) => {
     if (options.signal?.aborted) return reject(new Error("SSH transfer aborted"))
     const grouped = process.platform !== "win32"
     const child = spawn(
       options.transport.sshBinary,
-      [...options.transport.sshArgs, options.transport.host, options.command],
+      [
+        ...options.transport.sshArgs,
+        ...controlArgs(options.transport.multiplex),
+        options.transport.host,
+        options.command,
+      ],
       { stdio: ["pipe", "pipe", "pipe"], detached: grouped },
     )
 

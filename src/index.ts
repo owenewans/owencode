@@ -64,6 +64,12 @@ const Owencode = (async (_input, rawOptions) => {
     root: options.root,
     tarBinary,
     maxTransferBytes: options.maxTransferBytes,
+    multiplex: {
+      enabled: options.controlMaster,
+      persist: options.controlPersist,
+      maxSessions: options.maxSessions,
+    },
+    sessions: ssh.sessions,
   }
   const tunnels = new TunnelManager({ sshBinary: options.sshBinary, sshArgs: options.sshArgs, host: options.host })
   const scoped = (value: string) => remotePath(options.root, value)

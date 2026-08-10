@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import { randomBytes } from "node:crypto"
 import net from "node:net"
+import { noControlArgs } from "./multiplex.js"
 
 export type TunnelType = "local" | "remote" | "dynamic"
 
@@ -156,6 +157,7 @@ export class TunnelManager {
       this.transport.sshBinary,
       [
         ...this.transport.sshArgs,
+        ...noControlArgs(),
         "-N",
         "-T",
         "-o",

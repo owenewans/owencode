@@ -2,6 +2,7 @@ import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, wri
 import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
+import { Semaphore } from "../src/multiplex.js"
 import { localTransferPath, probeRemote, transfer, type TransferTransport } from "../src/transfer.js"
 
 const directories: string[] = []
@@ -24,6 +25,8 @@ function transport(root: string, maxTransferBytes = 8 * 1024 * 1024): TransferTr
     root,
     tarBinary: "tar",
     maxTransferBytes,
+    multiplex: { enabled: false, persist: "60s", maxSessions: 8 },
+    sessions: new Semaphore(8),
   }
 }
 

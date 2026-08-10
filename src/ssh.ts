@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto"
 import { spawn } from "node:child_process"
 import path from "node:path"
 import type { Options } from "./config.js"
+import { controlArgs, Semaphore } from "./multiplex.js"
 
 export type RunOptions = {
   input?: string | Buffer
@@ -25,14 +26,43 @@ export function sha256(content: string | Buffer): string {
 }
 
 export class SshClient {
-  constructor(private readonly options: Options) {}
+  private readonly semaphore: Semaphore
+
+  constructor(private readonly options: Options) {
+    this.semaphore = new Semaphore(options.maxSessions)
+  }
+
+  // Transfers open channels on the same multiplexed connection, so they have to
+  // draw from the same MaxSessions budget as ordinary commands.
+  get sessions() {
+    return this.semaphore
+  }
 
   async run(command: string, options: RunOptions = {}): Promise<RunResult> {
     if (options.signal?.aborted) throw new Error("SSH operation aborted")
+    const release = await this.semaphore.acquire()
+    try {
+      return await this.spawn(command, options)
+    } finally {
+      release()
+    }
+  }
+
+  private spawn(command: string, options: RunOptions): Promise<RunResult> {
     const limit = options.maxOutputBytes ?? this.options.maxOutputBytes
+    const args = [
+      ...this.options.sshArgs,
+      ...controlArgs({
+        enabled: this.options.controlMaster,
+        persist: this.options.controlPersist,
+        maxSessions: this.options.maxSessions,
+      }),
+      this.options.host,
+      command,
+    ]
     return new Promise((resolve, reject) => {
       const grouped = process.platform !== "win32"
-      const child = spawn(this.options.sshBinary, [...this.options.sshArgs, this.options.host, command], {
+      const child = spawn(this.options.sshBinary, args, {
         stdio: ["pipe", "pipe", "pipe"],
         detached: grouped,
       })

@@ -23,6 +23,7 @@ describe("plugin", () => {
       sshBinary: "/bin/sh",
       sshArgs: ["-c", 'exec /bin/sh -c "$2"', "owencode-test"],
       ghBinary: "/bin/echo",
+      controlMaster: false,
     })
     const context = {
       sessionID: "session",

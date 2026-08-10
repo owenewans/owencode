@@ -7,6 +7,9 @@ export type Options = {
   sshArgs: string[]
   maxOutputBytes: number
   maxTransferBytes: number
+  controlMaster: boolean
+  controlPersist: string
+  maxSessions: number
 }
 
 export function parseOptions(input: Record<string, unknown> | undefined): Options {
@@ -16,6 +19,9 @@ export function parseOptions(input: Record<string, unknown> | undefined): Option
   const sshArgs = input?.sshArgs ?? []
   const maxOutputBytes = input?.maxOutputBytes ?? 2 * 1024 * 1024
   const maxTransferBytes = input?.maxTransferBytes ?? 256 * 1024 * 1024
+  const controlMaster = input?.controlMaster ?? true
+  const controlPersist = input?.controlPersist ?? "60s"
+  const maxSessions = input?.maxSessions ?? 8
 
   if (typeof host !== "string" || host.length === 0) throw new Error("owencode: host is required")
   if (/[\0\r\n]/.test(host)) throw new Error("owencode: host contains a forbidden control character")
@@ -36,6 +42,15 @@ export function parseOptions(input: Record<string, unknown> | undefined): Option
   if (!Number.isSafeInteger(maxTransferBytes) || Number(maxTransferBytes) < 1024) {
     throw new Error("owencode: maxTransferBytes must be an integer of at least 1024")
   }
+  if (typeof controlMaster !== "boolean") throw new Error("owencode: controlMaster must be a boolean")
+  if (typeof controlPersist !== "string" || !/^(?:\d+[smh]?|yes|no)$/.test(controlPersist)) {
+    throw new Error("owencode: controlPersist must be a duration such as 60s")
+  }
+  // sshd defaults to MaxSessions 10 for the whole multiplexed connection, so
+  // the plugin has to stay below that or concurrent calls start failing.
+  if (!Number.isSafeInteger(maxSessions) || Number(maxSessions) < 1 || Number(maxSessions) > 10) {
+    throw new Error("owencode: maxSessions must be an integer between 1 and 10")
+  }
 
   return {
     host,
@@ -44,6 +59,9 @@ export function parseOptions(input: Record<string, unknown> | undefined): Option
     sshArgs,
     maxOutputBytes: Number(maxOutputBytes),
     maxTransferBytes: Number(maxTransferBytes),
+    controlMaster,
+    controlPersist,
+    maxSessions: Number(maxSessions),
   }
 }
 

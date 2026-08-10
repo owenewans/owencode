@@ -41,6 +41,10 @@ browser mcp:
 
 the plugin uses the system `ssh` executable. `~/.ssh/config`, ssh-agent, `IdentityFile`, `ProxyJump`, `known_hosts` and control connections work without a second configuration format.
 
+every tool call used to open its own ssh connection. a full handshake costs about 130 ms of pure cpu even at zero network latency, plus three to four round trips on the wire, so a single remote read could cost a quarter of a second before doing any work. the plugin now enables connection multiplexing by default: the first call establishes a master and every later call opens a channel on it, which costs process spawn plus roughly one round trip. `ControlMaster=auto` means a missing or dead master degrades to an ordinary connection instead of failing.
+
+the control socket is a credential. anyone able to write to it gets an authenticated session on the remote host without presenting a key, so it is created inside `$XDG_RUNTIME_DIR/owencode` with mode `0700`, ownership is verified, loose permissions are repaired, and `/tmp` is only used as a fallback in a uid-scoped `0700` directory. the path uses ssh's `%C` hash, which also keeps it under the 108 byte unix socket limit. because all channels share one connection they also share the server's `MaxSessions`, which defaults to 10, so the plugin serialises remote work through a semaphore capped at `maxSessions`. long lived `ssh_tunnel` forwards deliberately opt out with `ControlMaster=no`, otherwise an expiring master would take every open tunnel down with it.
+
 the github tool uses the local authenticated `gh` executable without a shell. `gh auth token` is blocked so credentials cannot be printed into model context.
 
 `git` covers the local repository while `gh` covers the github api. both parse a command string into an argument array and execute the binary directly, so quoting is predictable and no shell is involved. `git` runs with `GIT_TERMINAL_PROMPT=0`, rejects `git credential`, `credential.*`, `alias.*` and `--config-env` because each of those either prints or hides credentials, and redacts urls with embedded credentials from its output. this is a guardrail against accidental disclosure, not a sandbox: an approved git command still runs as your user, and aliases already configured in the repository are not resolved. a working directory outside the current worktree is included in the approval pattern so a remembered `git log` cannot be replayed against an unrelated repository.
@@ -150,6 +154,10 @@ browser environment:
 
 the generated Camoufox identity is stored with mode `0600` inside the profile and reused across restarts. it is regenerated when fingerprint settings or the installed Camoufox version change. proxy credentials should be passed through an environment variable rather than committed to a shared config.
 
+`controlMaster` turns multiplexing off when set to `false`, which is worth doing if the remote sshd forbids it or you are debugging a connection. `maxSessions` must stay at or below the server's `MaxSessions`.
+
+setting `root` to `/` asks for no path confinement at all, and the guards are written to skip in that case because confining to `/` is a contradiction. that is a legitimate choice for a dedicated host, but it does mean the structured file tools reach the whole filesystem, so it should be a deliberate decision rather than a default.
+
 `host` is an alias from `~/.ssh/config`. `root` is an absolute directory on that host. structured file-tool paths and the initial `ssh_bash` working directory are confined to `root`. an approved `ssh_bash` command still has every permission of the remote ssh account and is not a sandbox.
 
 `ssh_transfer` streams raw bytes through the same ssh transport instead of encoding them as text, so executables, archives and images arrive unchanged and the executable bit is preserved in both directions. nothing is buffered in model context and the payload never passes through the language model. remote paths stay confined to `root`, and an existing destination is refused unless `overwrite` is set.
@@ -190,7 +198,10 @@ options:
   "gitBinary": "git",
   "tarBinary": "tar",
   "maxOutputBytes": 2097152,
-  "maxTransferBytes": 268435456
+  "maxTransferBytes": 268435456,
+  "controlMaster": true,
+  "controlPersist": "60s",
+  "maxSessions": 8
 }
 ```
 
