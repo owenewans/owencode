@@ -42,6 +42,8 @@ describe("plugin", () => {
       "ssh_glob",
       "ssh_grep",
       "ssh_bash",
+      "deno_run",
+      "ssh_deno_run",
       "ssh_write",
       "ssh_edit",
       "ssh_apply_patch",

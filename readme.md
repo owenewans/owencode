@@ -6,7 +6,7 @@ opencode extensions by owenewans. local tools, remote machines and github.
 
 <a href="https://count.owenewans.org/owenewans/owencode?theme=moebooru-h&notitle"><img src="https://count.owenewans.org/owenewans/owencode?theme=moebooru-h&notitle" alt="repository views"></a>
 
-`node` `opencode` `ssh` `github` `camoufox` `playwright`
+`node` `deno` `opencode` `ssh` `github` `camoufox` `playwright`
 
 
 </div>
@@ -22,6 +22,10 @@ ssh tools:
 
 github tools:
 - `gh` - run parsed github cli command strings with native approvals and no shell
+
+deno tools:
+- `deno_run` - execute multiline TypeScript locally with full permissions
+- `ssh_deno_run` - execute the same TypeScript program on the configured SSH host
 
 browser mcp:
 - persistent anti-detect Camoufox profile
@@ -39,6 +43,7 @@ requirements:
 - opencode 1.18.15 or newer
 - node.js 22 or newer
 - openssh client and github cli locally
+- deno locally and on the SSH host when using the corresponding tools
 - xvfb for the default virtual display mode
 - posix shell, `sha256sum`, `realpath`, `find` and `rg` on the remote host
 
@@ -90,6 +95,8 @@ add the built plugin to `~/.config/opencode/opencode.json`:
     "ssh_write": "ask",
     "ssh_edit": "ask",
     "ssh_apply_patch": "ask",
+    "deno_run": "ask",
+    "ssh_deno_run": "ask",
     "gh": {
       "*": "ask",
       "gh repo view*": "allow",
@@ -121,6 +128,8 @@ the generated Camoufox identity is stored with mode `0600` inside the profile an
 
 `host` is an alias from `~/.ssh/config`. `root` is an absolute directory on that host. structured file-tool paths and the initial `ssh_bash` working directory are confined to `root`. an approved `ssh_bash` command still has every permission of the remote ssh account and is not a sandbox.
 
+`deno_run` and `ssh_deno_run` execute TypeScript with `--allow-all --allow-scripts --no-prompt --no-lock`. source code is passed through stdin without a heredoc or shell parsing. because stdin contains the source itself, programs should use `Deno.args`, files, `fetch`, or `Deno.Command` for additional input instead of reading `Deno.stdin`.
+
 options:
 ```json
 {
@@ -128,6 +137,8 @@ options:
   "root": "/srv/project",
   "sshBinary": "ssh",
   "sshArgs": ["-o", "ConnectTimeout=10"],
+  "denoBinary": "/usr/bin/deno",
+  "sshDenoBinary": "deno",
   "ghBinary": "gh",
   "maxOutputBytes": 2097152
 }

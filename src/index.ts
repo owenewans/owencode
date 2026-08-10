@@ -2,6 +2,7 @@ import path from "node:path"
 import { createTwoFilesPatch } from "diff"
 import { tool, type Plugin, type ToolContext } from "@opencode-ai/plugin"
 import { parseOptions, remotePath } from "./config.js"
+import { denoExecutionHash, remoteDenoJob, runDeno } from "./deno.js"
 import { parseGhCommand, renderGhCommand, runGh } from "./github.js"
 import { applyChunks, parsePatch, type PatchOperation } from "./patch.js"
 import { sha256, SshClient } from "./ssh.js"
@@ -27,9 +28,27 @@ async function approve(ctx: ToolContext, permission: string, pattern: string, me
   await ctx.ask({ permission, patterns: [pattern], always: [pattern], metadata })
 }
 
+function binaryOption(options: Record<string, unknown> | undefined, key: string, fallback: string) {
+  const value = options?.[key] ?? fallback
+  if (typeof value !== "string" || !value || /[\0\r\n]/.test(value)) throw new Error(`owencode: ${key} must be a valid executable path`)
+  return value
+}
+
+function denoToolArgs() {
+  return {
+    description: tool.schema.string().min(1).describe("Short description of what the TypeScript program does"),
+    code: tool.schema.string().min(1).describe("Complete multiline TypeScript source. The source itself consumes stdin; use Deno.args, files, fetch, or Deno.Command for additional input"),
+    workdir: tool.schema.string().optional().describe("Working directory, defaults to the current local or remote project directory"),
+    args: tool.schema.array(tool.schema.string()).optional().describe("Arguments exposed to the program as Deno.args"),
+    timeout: tool.schema.number().int().positive().optional().describe("Timeout in milliseconds"),
+  }
+}
+
 const Owencode = (async (_input, rawOptions) => {
   const options = parseOptions(rawOptions)
-  const ghBinary = typeof rawOptions?.ghBinary === "string" ? rawOptions.ghBinary : "gh"
+  const ghBinary = binaryOption(rawOptions, "ghBinary", "gh")
+  const denoBinary = binaryOption(rawOptions, "denoBinary", "deno")
+  const sshDenoBinary = binaryOption(rawOptions, "sshDenoBinary", "deno")
   const ssh = new SshClient(options)
   const scoped = (value: string) => remotePath(options.root, value)
   const permissionPath = (value: string) => `${options.host}:${display(options.root, value)}`
@@ -161,6 +180,76 @@ const Owencode = (async (_input, rawOptions) => {
             title: `${options.host}: ${args.command}`,
             output,
             metadata: { host: options.host, workdir, exitCode: result.exitCode },
+          }
+        },
+      }),
+
+      deno_run: tool({
+        description: "Execute a multiline TypeScript program locally with Deno and full permissions after approval. Uses deno run --allow-all and never invokes a shell. The source code is delivered through stdin, so the program must not try to read additional data from Deno.stdin; use Deno.args, Deno.readTextFile, fetch, or Deno.Command instead.",
+        args: denoToolArgs(),
+        async execute(args, ctx) {
+          const workdir = args.workdir ? path.resolve(ctx.directory, args.workdir) : ctx.directory
+          if (/[\0\r\n]/.test(workdir)) throw new Error("Deno working directory contains a control character")
+          const executionHash = denoExecutionHash(args.code, args.args)
+          await approve(ctx, "deno_run", `${workdir}:${executionHash}`, {
+            description: args.description,
+            workdir,
+            code: args.code,
+            executionHash,
+            args: args.args ?? [],
+          })
+          const result = await runDeno({
+            binary: denoBinary,
+            code: args.code,
+            args: args.args,
+            cwd: workdir,
+            signal: ctx.abort,
+            timeout: args.timeout ?? 120_000,
+            maxOutputBytes: options.maxOutputBytes,
+          })
+          const output = [result.stdout.trimEnd(), result.stderr.trimEnd()].filter(Boolean).join("\n") || "(no output)"
+          return {
+            title: args.description,
+            output,
+            metadata: { workdir, executionHash, exitCode: result.exitCode },
+          }
+        },
+      }),
+
+      ssh_deno_run: tool({
+        description: "Execute a multiline TypeScript program with full permissions on the configured SSH host after approval. Uses remote deno run --allow-all and sends source directly through SSH stdin without a shell heredoc. The source code itself consumes stdin, so use Deno.args, Deno.readTextFile, fetch, or Deno.Command for additional input.",
+        args: denoToolArgs(),
+        async execute(args, ctx) {
+          const workdir = scoped(args.workdir ?? ".")
+          await ssh.guardPath(options.root, workdir, ctx.abort)
+          const executionHash = denoExecutionHash(args.code, args.args)
+          await approve(ctx, "ssh_deno_run", `${options.host}:${workdir}:${executionHash}`, {
+            host: options.host,
+            description: args.description,
+            workdir,
+            code: args.code,
+            executionHash,
+            args: args.args ?? [],
+          })
+          const timeout = args.timeout ?? 120_000
+          const job = remoteDenoJob(sshDenoBinary, workdir, args.args, timeout)
+          let result
+          try {
+            result = await ssh.run(job.command, {
+              input: args.code,
+              signal: ctx.abort,
+              timeout: timeout + 5_000,
+            })
+          } catch (error) {
+            await ssh.run(job.cleanupCommand, { timeout: 10_000 }).catch(() => undefined)
+            throw error
+          }
+          if (result.exitCode === 124) throw new Error(`SSH Deno operation timed out after ${timeout}ms`)
+          const output = [result.stdout.toString("utf8").trimEnd(), result.stderr.trimEnd()].filter(Boolean).join("\n") || "(no output)"
+          return {
+            title: `${options.host}: ${args.description}`,
+            output,
+            metadata: { host: options.host, workdir, executionHash, exitCode: result.exitCode },
           }
         },
       }),

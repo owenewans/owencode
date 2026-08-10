@@ -31,20 +31,36 @@ export class SshClient {
     if (options.signal?.aborted) throw new Error("SSH operation aborted")
     const limit = options.maxOutputBytes ?? this.options.maxOutputBytes
     return new Promise((resolve, reject) => {
+      const grouped = process.platform !== "win32"
       const child = spawn(this.options.sshBinary, [...this.options.sshArgs, this.options.host, command], {
         stdio: ["pipe", "pipe", "pipe"],
+        detached: grouped,
       })
       const stdout: Buffer[] = []
       const stderr: Buffer[] = []
-      let stdoutBytes = 0
-      let stderrBytes = 0
+      let outputBytes = 0
       let settled = false
+      let failure: Error | undefined
+      let killTimer: NodeJS.Timeout | undefined
 
+      const cleanup = () => {
+        if (timer) clearTimeout(timer)
+        if (killTimer) clearTimeout(killTimer)
+        options.signal?.removeEventListener("abort", abort)
+      }
+      const kill = (signal: NodeJS.Signals) => {
+        try {
+          if (grouped && child.pid) process.kill(-child.pid, signal)
+          else child.kill(signal)
+        } catch {
+          // The process may have exited between the event and the signal.
+        }
+      }
       const stop = (error: Error) => {
-        if (settled) return
-        settled = true
-        child.kill("SIGTERM")
-        reject(error)
+        if (settled || failure) return
+        failure = error
+        kill("SIGTERM")
+        killTimer = setTimeout(() => kill("SIGKILL"), 1000)
       }
       const abort = () => stop(new Error("SSH operation aborted"))
       const timer = options.timeout
@@ -54,20 +70,20 @@ export class SshClient {
       options.signal?.addEventListener("abort", abort, { once: true })
       child.on("error", stop)
       child.stdout.on("data", (chunk: Buffer) => {
-        stdoutBytes += chunk.length
-        if (stdoutBytes > limit) return stop(new Error(`SSH stdout exceeded ${limit} bytes`))
+        outputBytes += chunk.length
+        if (outputBytes > limit) return stop(new Error(`SSH output exceeded ${limit} bytes`))
         stdout.push(chunk)
       })
       child.stderr.on("data", (chunk: Buffer) => {
-        stderrBytes += chunk.length
-        if (stderrBytes > limit) return stop(new Error(`SSH stderr exceeded ${limit} bytes`))
+        outputBytes += chunk.length
+        if (outputBytes > limit) return stop(new Error(`SSH output exceeded ${limit} bytes`))
         stderr.push(chunk)
       })
       child.on("close", (code) => {
-        if (timer) clearTimeout(timer)
-        options.signal?.removeEventListener("abort", abort)
         if (settled) return
         settled = true
+        cleanup()
+        if (failure) return reject(failure)
         resolve({ stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr).toString("utf8"), exitCode: code ?? 255 })
       })
 

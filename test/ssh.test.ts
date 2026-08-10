@@ -64,4 +64,10 @@ describe("ssh helpers", () => {
 
     await expect(localClient(directory).textFile(path.join(directory, "escape"))).rejects.toThrow("outside configured root")
   })
+
+  it("limits combined stdout and stderr", async () => {
+    await expect(
+      localClient().run("printf 123456; printf abcdef >&2", { maxOutputBytes: 10 }),
+    ).rejects.toThrow("SSH output exceeded 10 bytes")
+  })
 })
