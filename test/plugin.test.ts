@@ -17,6 +17,7 @@ describe("plugin", () => {
     directories.push(root)
     await writeFile(path.join(root, "file.txt"), "hello\n")
     const approvals: Array<{ permission: string; patterns: string[]; always: string[] }> = []
+    const metadata: Array<{ title?: string; metadata?: Record<string, unknown> }> = []
     const hooks = await Owencode({} as never, {
       host: "ignored",
       root,
@@ -31,7 +32,9 @@ describe("plugin", () => {
       directory: root,
       worktree: root,
       abort: new AbortController().signal,
-      metadata() {},
+      metadata(value: { title?: string; metadata?: Record<string, unknown> }) {
+        metadata.push(value)
+      },
       async ask(request: { permission: string; patterns: string[]; always: string[] }) {
         approvals.push(request)
       },
@@ -57,6 +60,10 @@ describe("plugin", () => {
       permission: "gh",
       patterns: ["gh --repo owner/repo pr merge 1"],
       always: ["gh --repo owner/repo pr merge 1"],
+    })
+    expect(metadata).toContainEqual({
+      title: "gh --repo owner/repo pr merge 1",
+      metadata: { command: "gh --repo owner/repo pr merge 1" },
     })
   })
 })

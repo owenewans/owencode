@@ -289,6 +289,7 @@ const Owencode = (async (_input, rawOptions) => {
         async execute(args, ctx) {
           validateGhArgs(args.args)
           const command = renderGhCommand(args.args)
+          ctx.metadata({ title: command, metadata: { command } })
           await ctx.ask({
             permission: "gh",
             patterns: [command],
