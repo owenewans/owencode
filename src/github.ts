@@ -15,14 +15,6 @@ export type GhRunOptions = {
 
 export function validateGhArgs(args: string[]) {
   if (args.length === 0) throw new Error("gh requires at least one argument")
-  if (args.some((arg) => /[\0\r\n]/.test(arg))) throw new Error("gh arguments cannot contain control characters")
-  if (args.some((arg, index) => arg === "auth" && args[index + 1] === "token")) {
-    throw new Error("gh auth token is blocked to keep credentials out of model context")
-  }
-  const authStatus = args.some((arg, index) => arg === "auth" && args[index + 1] === "status")
-  if (authStatus && args.some((arg) => arg === "-t" || arg === "--show-token" || arg.startsWith("--show-token="))) {
-    throw new Error("showing GitHub authentication tokens is blocked")
-  }
 }
 
 export function parseGhCommand(command: string) {

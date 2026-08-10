@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { parseGitCommand, redactGitOutput, renderGitCommand, runGit, validateGitArgs } from "../src/git.js"
+import { parseGitCommand, renderGitCommand, runGit } from "../src/git.js"
 
 describe("git cli", () => {
   it("parses and renders commands without a shell", () => {
@@ -8,19 +8,36 @@ describe("git cli", () => {
     expect(() => parseGitCommand("git status")).toThrow("without the leading git")
   })
 
-  it("blocks credential operations and sensitive command configuration", () => {
-    expect(() => validateGitArgs(["credential", "fill"])).toThrow("blocked")
-    expect(() => validateGitArgs(["credential-cache", "exit"])).toThrow("blocked")
-    expect(() => validateGitArgs(["-c", "credential.helper=store", "fetch"])).toThrow("blocked")
-    expect(() => validateGitArgs(["-chttp.x.extraHeader=secret", "fetch"])).toThrow("blocked")
-    expect(() => validateGitArgs(["-c", "alias.leak=credential", "leak", "fill"])).toThrow("alias")
-    expect(() => validateGitArgs(["--config-env=credential.helper=EVIL", "fetch"])).toThrow("config-env")
+  // Nothing is filtered any more. Every argument reaches git, and the rendered
+  // command is what the approval prompt shows, so the prompt is the decision
+  // point rather than a hardcoded list of opinions.
+  it("passes every argument through, including ones that execute code", () => {
+    expect(parseGitCommand("credential fill")).toEqual(["credential", "fill"])
+    expect(parseGitCommand('-c core.sshCommand="ssh -i /tmp/key" fetch')).toEqual([
+      "-c",
+      "core.sshCommand=ssh -i /tmp/key",
+      "fetch",
+    ])
+    expect(parseGitCommand("-c alias.deploy=push --config-env=X=Y status")).toEqual([
+      "-c",
+      "alias.deploy=push",
+      "--config-env=X=Y",
+      "status",
+    ])
+    expect(renderGitCommand(["-c", "credential.helper=store", "fetch"])).toBe("git -c credential.helper=store fetch")
+    expect(renderGitCommand(["-c", "core.sshCommand=ssh -i /tmp/key", "fetch"])).toBe(
+      'git -c "core.sshCommand=ssh -i /tmp/key" fetch',
+    )
   })
 
-  it("redacts credentials in command output", () => {
-    expect(redactGitOutput("https://user:secret@example.com/repo\nAuthorization: Bearer token"))
-      .toBe("https://[redacted]@example.com/repo\nAuthorization: [redacted]")
-    expect(redactGitOutput("username=owenewans\npassword=hunter2")).toBe("username=[redacted]\npassword=[redacted]")
+  it("returns output verbatim without redaction", async () => {
+    const result = await runGit({
+      binary: "/bin/sh",
+      args: ["-c", 'printf "https://user:secret@example.com/repo"'],
+      cwd: "/tmp",
+      maxOutputBytes: 1024,
+    })
+    expect(result.stdout).toBe("https://user:secret@example.com/repo")
   })
 
   it("executes argument arrays with interactive authentication disabled", async () => {

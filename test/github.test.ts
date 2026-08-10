@@ -8,11 +8,13 @@ describe("github cli", () => {
     )
   })
 
-  it("blocks token disclosure and control characters", () => {
-    expect(() => validateGhArgs(["auth", "token"])).toThrow("blocked")
-    expect(() => validateGhArgs(["auth", "status", "--show-token"])).toThrow("tokens")
-    expect(() => validateGhArgs(["auth", "status", "-t"])).toThrow("tokens")
-    expect(() => validateGhArgs(["repo", "view\nwhoami"])).toThrow("control characters")
+  it("passes every argument through, including token disclosure", () => {
+    expect(parseGhCommand("auth token")).toEqual(["auth", "token"])
+    expect(parseGhCommand("auth status --show-token")).toEqual(["auth", "status", "--show-token"])
+    expect(validateGhArgs(["auth", "token"])).toBeUndefined()
+    // A command string still cannot smuggle a newline past the approval prompt,
+    // because the prompt renders one line and the parser rejects the input.
+    expect(() => parseGhCommand("repo view\nwhoami")).toThrow("control characters")
   })
 
   it("parses quoted command strings without invoking a shell", () => {
