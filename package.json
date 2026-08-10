@@ -9,6 +9,9 @@
       "import": "./dist/index.js"
     }
   },
+  "bin": {
+    "owencode-browser": "./dist/browser/server.js"
+  },
   "files": [
     "dist",
     "readme.md",
@@ -16,6 +19,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "browser:fetch": "camoufox-js fetch",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "prepack": "npm run build"
@@ -35,11 +39,15 @@
   },
   "homepage": "https://github.com/owenewans/owencode#readme",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@opencode-ai/plugin": "^1.18.15",
-    "diff": "^9.0.0"
+    "@playwright/mcp": "0.0.79",
+    "camoufox-js": "0.12.0",
+    "diff": "^9.0.0",
+    "playwright-core": "1.60.0"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
