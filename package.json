@@ -27,7 +27,7 @@
     "remote-development"
   ],
   "author": "owenewans <owenewans@owenewans.org>",
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/owenewans/sshopencode.git"

@@ -9,7 +9,7 @@ native ssh counterparts for opencode tools. local opencode, remote files and com
 </div>
 
 stack       typescript / opencode plugin api / openssh
-license     mit
+license     gpl-3.0-or-later
 
 tools:
 - `ssh_read` - read files and list directories
