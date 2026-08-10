@@ -3,10 +3,13 @@ import { createTwoFilesPatch } from "diff"
 import { tool, type Plugin, type ToolContext } from "@opencode-ai/plugin"
 import { parseOptions, remotePath } from "./config.js"
 import { denoExecutionHash, remoteDenoJob, runDeno } from "./deno.js"
+import { parseGitCommand, renderGitCommand, runGit } from "./git.js"
 import { parseGhCommand, renderGhCommand, runGh } from "./github.js"
 import { applyChunks, parsePatch, type PatchOperation } from "./patch.js"
 import { ENGINE_NAMES, redactProxy, renderReport, resolveSearchSettings, webSearch, type EngineName } from "./search/index.js"
 import { sha256, SshClient } from "./ssh.js"
+import { localTransferPath, transfer, type TransferTransport } from "./transfer.js"
+import { describeTunnel, isLoopback, TunnelManager } from "./tunnel.js"
 
 type Change = {
   operation: PatchOperation
@@ -48,10 +51,21 @@ function denoToolArgs() {
 const Owencode = (async (_input, rawOptions) => {
   const options = parseOptions(rawOptions)
   const ghBinary = binaryOption(rawOptions, "ghBinary", "gh")
+  const gitBinary = binaryOption(rawOptions, "gitBinary", "git")
+  const tarBinary = binaryOption(rawOptions, "tarBinary", "tar")
   const denoBinary = binaryOption(rawOptions, "denoBinary", "deno")
   const sshDenoBinary = binaryOption(rawOptions, "sshDenoBinary", "deno")
   const searchSettings = resolveSearchSettings(rawOptions)
   const ssh = new SshClient(options)
+  const transport: TransferTransport = {
+    sshBinary: options.sshBinary,
+    sshArgs: options.sshArgs,
+    host: options.host,
+    root: options.root,
+    tarBinary,
+    maxTransferBytes: options.maxTransferBytes,
+  }
+  const tunnels = new TunnelManager({ sshBinary: options.sshBinary, sshArgs: options.sshArgs, host: options.host })
   const scoped = (value: string) => remotePath(options.root, value)
   const permissionPath = (value: string) => `${options.host}:${display(options.root, value)}`
 
@@ -370,6 +384,121 @@ const Owencode = (async (_input, rawOptions) => {
         },
       }),
 
+      ssh_transfer: tool({
+        description: "Copy files or directories between the local machine and the configured SSH host. Streams raw bytes, so binaries and archives survive intact. Remote paths are confined to the configured root.",
+        args: {
+          direction: tool.schema.enum(["upload", "download"]).describe("upload sends the local path to the host, download fetches the remote path"),
+          localPath: tool.schema.string().min(1).describe("Local file or directory path, absolute or relative to the project directory"),
+          remotePath: tool.schema.string().min(1).describe("Remote path, absolute or relative to the configured root"),
+          recursive: tool.schema.boolean().optional().describe("Transfer a directory tree instead of a single file, default false"),
+          overwrite: tool.schema.boolean().optional().describe("Replace an existing destination, default false"),
+          timeout: tool.schema.number().int().positive().optional().describe("Timeout in milliseconds"),
+        },
+        async execute(args, ctx) {
+          const localPath = localTransferPath(ctx.directory, args.localPath)
+          const remoteTarget = scoped(args.remotePath)
+          await ssh.guardPath(options.root, remoteTarget, ctx.abort)
+          const recursive = args.recursive ?? false
+          const overwrite = args.overwrite ?? false
+          const arrow = args.direction === "upload" ? "->" : "<-"
+          const pattern = `${args.direction}:${localPath}:${permissionPath(remoteTarget)}`
+          await approve(ctx, "ssh_transfer", pattern, {
+            host: options.host,
+            direction: args.direction,
+            localPath,
+            remotePath: remoteTarget,
+            recursive,
+            overwrite,
+          })
+          const result = await transfer(transport, {
+            direction: args.direction,
+            localPath,
+            remotePath: remoteTarget,
+            recursive,
+            overwrite,
+            signal: ctx.abort,
+            timeout: args.timeout,
+          })
+          const mode = result.mode === undefined ? "" : ` mode ${result.mode.toString(8).padStart(3, "0")}`
+          return {
+            title: `${localPath} ${arrow} ${options.host}:${display(options.root, remoteTarget)}`,
+            output: `Transferred ${result.kind} (${result.bytes} bytes)${mode}.`,
+            metadata: {
+              host: options.host,
+              direction: args.direction,
+              localPath,
+              remotePath: remoteTarget,
+              bytes: result.bytes,
+              kind: result.kind,
+            },
+          }
+        },
+      }),
+
+      ssh_tunnel: tool({
+        description: "Open, list and close SSH port forwards to the configured host. Local and dynamic tunnels bind on this machine, remote tunnels bind on the host. Tunnels are tracked and closed when OpenCode exits.",
+        args: {
+          action: tool.schema.enum(["open", "list", "close"]).describe("Operation to perform"),
+          type: tool.schema.enum(["local", "remote", "dynamic"]).optional().describe("Forward type for open: local (-L), remote (-R) or dynamic SOCKS (-D)"),
+          bindHost: tool.schema.string().optional().describe("Address the forward listens on, default 127.0.0.1"),
+          bindPort: tool.schema.number().int().min(1).max(65535).optional().describe("Port the forward listens on"),
+          destinationHost: tool.schema.string().optional().describe("Target host for local and remote forwards"),
+          destinationPort: tool.schema.number().int().min(1).max(65535).optional().describe("Target port for local and remote forwards"),
+          id: tool.schema.string().optional().describe("Tunnel id for close"),
+        },
+        async execute(args, ctx) {
+          if (args.action === "list") {
+            const records = tunnels.list()
+            return {
+              title: `${options.host}: ${records.length} tunnel(s)`,
+              output: records.map((item) => describeTunnel(item, options.host)).join("\n") || "No open tunnels",
+              metadata: { host: options.host, tunnels: records },
+            }
+          }
+          if (args.action === "close") {
+            const id = args.id
+            if (!id) throw new Error("close requires a tunnel id")
+            await approve(ctx, "ssh_tunnel", `close:${options.host}:${id}`, { host: options.host, action: "close", id })
+            if (!(await tunnels.close(id))) throw new Error(`unknown tunnel: ${id}`)
+            return { title: `${options.host}: closed ${id}`, output: `Closed ${id}.`, metadata: { host: options.host, id } }
+          }
+
+          const type = args.type
+          if (!type) throw new Error("open requires a tunnel type")
+          if (args.bindPort === undefined) throw new Error("open requires a bindPort")
+          const bindHost = args.bindHost ?? "127.0.0.1"
+          const exposed = !isLoopback(bindHost)
+          const pattern = `open:${options.host}:${type}:${bindHost}:${args.bindPort}`
+          await approve(ctx, "ssh_tunnel", pattern, {
+            host: options.host,
+            action: "open",
+            type,
+            bindHost,
+            bindPort: args.bindPort,
+            destinationHost: args.destinationHost,
+            destinationPort: args.destinationPort,
+            exposed,
+          })
+          const record = await tunnels.open({
+            type,
+            bindHost,
+            bindPort: args.bindPort,
+            destinationHost: args.destinationHost,
+            destinationPort: args.destinationPort,
+          })
+          const network = type === "remote" ? `the network around ${options.host}` : "this machine's network"
+          const warning = exposed ? `\nThis tunnel is reachable from ${network}, not only from loopback.` : ""
+          const unverified = record.verified
+            ? ""
+            : "\nA remote forward cannot be probed locally, so the listener on the host was not confirmed."
+          return {
+            title: `${options.host}: ${record.id}`,
+            output: `Opened ${describeTunnel(record, options.host)}.${warning}${unverified}`,
+            metadata: { host: options.host, ...record },
+          }
+        },
+      }),
+
       gh: tool({
         description: "Run GitHub CLI commands using the local authenticated gh installation. Pass a command string without the leading gh. The string is parsed into an argument array and never executed through a shell. Supports repo, pr, issue, release, api, search, run, workflow and other gh commands. Token disclosure is blocked.",
         args: {
@@ -402,6 +531,42 @@ const Owencode = (async (_input, rawOptions) => {
           })
           const output = [result.stdout.trimEnd(), result.stderr.trimEnd()].filter(Boolean).join("\n") || "(no output)"
           return { title: command, output, metadata: { command, exitCode: result.exitCode } }
+        },
+      }),
+
+      git: tool({
+        description: "Run local Git commands without a shell. Pass a command string without the leading git. Interactive credential prompts are disabled and credential helper commands are blocked.",
+        args: {
+          command: tool.schema.string().min(1).describe("Git command without the leading git, for example: status --short --branch"),
+          workdir: tool.schema.string().optional().describe("Repository directory, defaults to the current project directory"),
+          stdin: tool.schema.string().optional().describe("Optional standard input, for example a commit message with commit --file -"),
+          timeout: tool.schema.number().int().positive().optional().describe("Timeout in milliseconds"),
+        },
+        async execute(args, ctx) {
+          const commandArgs = parseGitCommand(args.command)
+          const command = renderGitCommand(commandArgs)
+          const workdir = args.workdir ? path.resolve(ctx.directory, args.workdir) : ctx.directory
+          if (/[\0\r\n]/.test(workdir)) throw new Error("Git working directory contains a control character")
+          const inside = workdir === ctx.worktree || workdir.startsWith(`${ctx.worktree}${path.sep}`)
+          const pattern = inside ? command : renderGitCommand(["-C", workdir, ...commandArgs])
+          await ctx.ask({
+            permission: "git",
+            patterns: [pattern],
+            always: [pattern],
+            metadata: { command, workdir, external: !inside, hasStdin: args.stdin !== undefined },
+          })
+          const result = await runGit({
+            binary: gitBinary,
+            args: commandArgs,
+            cwd: workdir,
+            stdin: args.stdin,
+            signal: ctx.abort,
+            timeout: args.timeout,
+            maxOutputBytes: options.maxOutputBytes,
+          })
+          const text = [result.stdout.trimEnd(), result.stderr.trimEnd()].filter(Boolean).join("\n") || "(no output)"
+          const output = result.exitCode === 0 ? text : `${text}\n(git exited with code ${result.exitCode})`
+          return { title: command, output, metadata: { command, workdir, exitCode: result.exitCode } }
         },
       }),
 

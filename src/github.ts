@@ -1,3 +1,4 @@
+import { parseCommand, renderCommand } from "./cli.js"
 import { runProcess, type ProcessResult } from "./process.js"
 
 export type GhResult = ProcessResult
@@ -25,62 +26,13 @@ export function validateGhArgs(args: string[]) {
 }
 
 export function parseGhCommand(command: string) {
-  if (/\0|\r|\n/.test(command)) throw new Error("gh command cannot contain control characters")
-  const args: string[] = []
-  let value = ""
-  let quote: "single" | "double" | undefined
-  let escaped = false
-  let started = false
-
-  const flush = () => {
-    if (!started) return
-    args.push(value)
-    value = ""
-    started = false
-  }
-  for (const character of command.trim()) {
-    if (escaped) {
-      value += character
-      escaped = false
-      started = true
-      continue
-    }
-    if (character === "\\" && quote !== "single") {
-      escaped = true
-      started = true
-      continue
-    }
-    if (quote === "single") {
-      if (character === "'") quote = undefined
-      else value += character
-      continue
-    }
-    if (quote === "double") {
-      if (character === '"') quote = undefined
-      else value += character
-      continue
-    }
-    if (character === "'") {
-      quote = "single"
-      started = true
-    } else if (character === '"') {
-      quote = "double"
-      started = true
-    } else if (/\s/.test(character)) flush()
-    else {
-      value += character
-      started = true
-    }
-  }
-  if (escaped || quote) throw new Error("gh command contains an unterminated quote or escape")
-  flush()
-  if (args[0] === "gh") throw new Error("pass gh arguments without the leading gh")
+  const args = parseCommand(command, "gh", "gh")
   validateGhArgs(args)
   return args
 }
 
 export function renderGhCommand(args: string[]) {
-  return `gh ${args.map((arg) => (/[\s'"\\]/.test(arg) ? JSON.stringify(arg) : arg)).join(" ")}`
+  return renderCommand("gh", args)
 }
 
 export async function runGh(options: GhRunOptions): Promise<GhResult> {

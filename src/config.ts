@@ -6,6 +6,7 @@ export type Options = {
   sshBinary: string
   sshArgs: string[]
   maxOutputBytes: number
+  maxTransferBytes: number
 }
 
 export function parseOptions(input: Record<string, unknown> | undefined): Options {
@@ -14,6 +15,7 @@ export function parseOptions(input: Record<string, unknown> | undefined): Option
   const sshBinary = input?.sshBinary ?? "ssh"
   const sshArgs = input?.sshArgs ?? []
   const maxOutputBytes = input?.maxOutputBytes ?? 2 * 1024 * 1024
+  const maxTransferBytes = input?.maxTransferBytes ?? 256 * 1024 * 1024
 
   if (typeof host !== "string" || host.length === 0) throw new Error("owencode: host is required")
   if (/[\0\r\n]/.test(host)) throw new Error("owencode: host contains a forbidden control character")
@@ -31,8 +33,18 @@ export function parseOptions(input: Record<string, unknown> | undefined): Option
   if (!Number.isSafeInteger(maxOutputBytes) || Number(maxOutputBytes) < 1024) {
     throw new Error("owencode: maxOutputBytes must be an integer of at least 1024")
   }
+  if (!Number.isSafeInteger(maxTransferBytes) || Number(maxTransferBytes) < 1024) {
+    throw new Error("owencode: maxTransferBytes must be an integer of at least 1024")
+  }
 
-  return { host, root: path.posix.normalize(root), sshBinary, sshArgs, maxOutputBytes: Number(maxOutputBytes) }
+  return {
+    host,
+    root: path.posix.normalize(root),
+    sshBinary,
+    sshArgs,
+    maxOutputBytes: Number(maxOutputBytes),
+    maxTransferBytes: Number(maxTransferBytes),
+  }
 }
 
 export function remotePath(root: string, value: string): string {

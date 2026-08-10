@@ -47,7 +47,10 @@ describe("plugin", () => {
       "ssh_write",
       "ssh_edit",
       "ssh_apply_patch",
+      "ssh_transfer",
+      "ssh_tunnel",
       "gh",
+      "git",
       "web_search",
     ])
     const result = await hooks.tool?.ssh_read.execute({ filePath: "file.txt" }, context)

@@ -19,9 +19,12 @@ ssh tools:
 - `ssh_write` - atomically create or replace files
 - `ssh_edit` - atomically replace exact text
 - `ssh_apply_patch` - add, update, move and delete files with opencode patches
+- `ssh_transfer` - stream binaries and directory trees to and from the host
+- `ssh_tunnel` - open, list and close local, remote and dynamic port forwards
 
-github tools:
+git tools:
 - `gh` - run parsed github cli command strings with native approvals and no shell
+- `git` - run parsed local git command strings without a shell
 
 deno tools:
 - `deno_run` - execute multiline TypeScript locally with full permissions
@@ -40,6 +43,8 @@ the plugin uses the system `ssh` executable. `~/.ssh/config`, ssh-agent, `Identi
 
 the github tool uses the local authenticated `gh` executable without a shell. `gh auth token` is blocked so credentials cannot be printed into model context.
 
+`git` covers the local repository while `gh` covers the github api. both parse a command string into an argument array and execute the binary directly, so quoting is predictable and no shell is involved. `git` runs with `GIT_TERMINAL_PROMPT=0`, rejects `git credential`, `credential.*`, `alias.*` and `--config-env` because each of those either prints or hides credentials, and redacts urls with embedded credentials from its output. this is a guardrail against accidental disclosure, not a sandbox: an approved git command still runs as your user, and aliases already configured in the repository are not resolved. a working directory outside the current worktree is included in the approval pattern so a remembered `git log` cannot be replayed against an unrelated repository.
+
 the browser mcp launches `camoufox-js` directly and passes its persistent context to `@playwright/mcp` over stdio. it does not need python, uv, an open port or a websocket server.
 
 `web_search` parses public html result pages, so it needs no api key. every engine first uses `got-scraping`; if the complete engine session fails, encounters an anti-bot response or returns no results, it is restarted through a [CycleTLS](https://github.com/Danny-Dasilva/CycleTLS) Go/uTLS fallback. every attempt gets an isolated cookie jar and a pinned browser fingerprint, and all traffic goes through a socks proxy by default because several engines are unreachable on a direct connection from many networks.
@@ -47,8 +52,9 @@ the browser mcp launches `camoufox-js` directly and passes its persistent contex
 requirements:
 - opencode 1.18.15 or newer
 - node.js 22 or newer
-- openssh client and github cli locally
+- openssh client, git and github cli locally
 - deno locally and on the SSH host when using the corresponding tools
+- `tar` locally and on the SSH host for recursive `ssh_transfer`
 - a local socks proxy on `127.0.0.1:1080` for `web_search`, or `searchProxy: false` to go direct
 - xvfb for the default virtual display mode
 - posix shell, `sha256sum`, `realpath`, `find` and `rg` on the remote host
@@ -101,9 +107,20 @@ add the built plugin to `~/.config/opencode/opencode.json`:
     "ssh_write": "ask",
     "ssh_edit": "ask",
     "ssh_apply_patch": "ask",
+    "ssh_transfer": "ask",
+    "ssh_tunnel": "ask",
     "deno_run": "ask",
     "ssh_deno_run": "ask",
     "web_search": "allow",
+    "git": {
+      "*": "ask",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "git show*": "allow",
+      "git branch": "allow",
+      "git remote -v": "allow"
+    },
     "gh": {
       "*": "ask",
       "gh repo view*": "allow",
@@ -135,6 +152,12 @@ the generated Camoufox identity is stored with mode `0600` inside the profile an
 
 `host` is an alias from `~/.ssh/config`. `root` is an absolute directory on that host. structured file-tool paths and the initial `ssh_bash` working directory are confined to `root`. an approved `ssh_bash` command still has every permission of the remote ssh account and is not a sandbox.
 
+`ssh_transfer` streams raw bytes through the same ssh transport instead of encoding them as text, so executables, archives and images arrive unchanged and the executable bit is preserved in both directions. nothing is buffered in model context and the payload never passes through the language model. remote paths stay confined to `root`, and an existing destination is refused unless `overwrite` is set.
+
+single files land on a temporary name first; the receiving side compares the stored size against the expected size and refuses to commit a truncated file, so a dropped connection cannot leave a half written binary in place. recursive transfers stream a `tar` pipe into a fresh staging directory and only then replace the destination, which means a symlink already present at the destination is never followed and a hostile archive cannot write outside it. gnu tar additionally refuses `..` members and strips absolute paths. both the tar process and the ssh process must exit cleanly, otherwise the transfer is reported as failed rather than silently truncated. a recursive transfer with `overwrite` replaces the destination directory instead of merging into it.
+
+`ssh_tunnel` keeps a registry of forwards for the lifetime of the opencode process. tunnels bind `127.0.0.1` unless another address is requested, and `ExitOnForwardFailure` plus `BatchMode` turn a rejected forward into an error rather than a silent no-op. local and dynamic forwards are confirmed by connecting to the bound port before the tool returns; a remote forward binds on the host and cannot be probed from here, so it is reported as unverified. closing a tunnel waits for the process to actually exit and escalates to `SIGKILL` if it ignores `SIGTERM`. tunnel processes are unreferenced so they never keep opencode alive, share opencode's process group so a terminal interrupt reaches them, and an exit hook closes whatever remains. if opencode is killed with `SIGKILL` no cleanup can run and a forward may outlive it. a forward bound beyond loopback is flagged in the approval metadata and in the tool output.
+
 `deno_run` and `ssh_deno_run` execute TypeScript with `--allow-all --allow-scripts --no-prompt --no-lock`. source code is passed through stdin without a heredoc or shell parsing. because stdin contains the source itself, programs should use `Deno.args`, files, `fetch`, or `Deno.Command` for additional input instead of reading `Deno.stdin`.
 
 `web_search` runs in two modes. `auto` walks the configured engines in order and stops at the first one that answers, which keeps a normal query to a single request. `all` queries every engine in parallel and merges the results, ranking pages that several engines agree on first and keeping the longest available summary. duplicate urls are collapsed after normalising the host, trailing slash and tracking parameters, and duckduckgo redirect links are resolved back to their real targets.
@@ -164,7 +187,10 @@ options:
   "denoBinary": "/usr/bin/deno",
   "sshDenoBinary": "deno",
   "ghBinary": "gh",
-  "maxOutputBytes": 2097152
+  "gitBinary": "git",
+  "tarBinary": "tar",
+  "maxOutputBytes": 2097152,
+  "maxTransferBytes": 268435456
 }
 ```
 
@@ -177,7 +203,9 @@ npm run build
 
 session tools such as `task`, `question` and `todowrite` stay local because they orchestrate opencode itself rather than a filesystem. remote lsp is intentionally not emulated; run opencode on the remote host when the language server must be remote.
 
-`ssh_apply_patch` validates every file before writing, but a multi-file patch is not a filesystem transaction. if the connection or remote disk fails during commit, already written files remain changed and the tool reports the failure.
+`ssh_apply_patch` validates every file before writing, but a multi-file patch is not a filesystem transaction. if the connection or remote disk fails during commit, already written files remain changed and the tool reports the failure. `ssh_transfer` has the same property for recursive transfers: an interrupted tar stream leaves the files that already arrived in place.
+
+an approved `ssh_tunnel` is a real network path into or out of the remote network for as long as it stays open. a remote forward in particular lets the remote host reach a service on this machine, so treat it like opening a firewall rule rather than like reading a file.
 
 browser pages are untrusted input. use a dedicated profile and do not keep unrelated personal sessions in it.
 
