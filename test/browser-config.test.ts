@@ -1,7 +1,7 @@
 import path from "node:path"
 import os from "node:os"
 import { describe, expect, it } from "vitest"
-import { resolveSettings } from "../src/browser/config.js"
+import { browserEnvironment, resolveSettings } from "../src/browser/config.js"
 
 describe("browser configuration", () => {
   it("defaults to a persistent virtual profile", () => {
@@ -44,5 +44,21 @@ describe("browser configuration", () => {
   it("rejects unsupported display and OS values", () => {
     expect(() => resolveSettings({}, { OWENCODE_BROWSER_DISPLAY: "headless" })).toThrow("display")
     expect(() => resolveSettings({}, { OWENCODE_BROWSER_OS: "android" })).toThrow("operating system")
+  })
+
+  it("forces virtual displays through X11 instead of the desktop Wayland session", () => {
+    expect(browserEnvironment(":42", {
+      DISPLAY: ":1",
+      WAYLAND_DISPLAY: "wayland-1",
+      WAYLAND_SOCKET: "socket",
+      XDG_SESSION_TYPE: "wayland",
+      PATH: "/usr/bin",
+    })).toEqual({
+      DISPLAY: ":42",
+      XDG_SESSION_TYPE: "x11",
+      PATH: "/usr/bin",
+      MOZ_ENABLE_WAYLAND: "0",
+      GDK_BACKEND: "x11",
+    })
   })
 })

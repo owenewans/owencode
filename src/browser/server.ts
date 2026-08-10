@@ -6,7 +6,7 @@ import { Camoufox } from "camoufox-js"
 import { VirtualDisplay } from "camoufox-js/dist/virtdisplay.js"
 import fs from "node:fs/promises"
 import type { BrowserContext } from "playwright-core"
-import { loadSettings } from "./config.js"
+import { browserEnvironment, loadSettings } from "./config.js"
 import { loadOrCreateIdentity } from "./identity.js"
 
 async function main() {
@@ -44,10 +44,7 @@ async function main() {
     const display = settings.display === "virtual"
       ? await (virtualDisplay = new VirtualDisplay(false)).get()
       : undefined
-    const browserEnv = Object.fromEntries(
-      Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
-    )
-    if (display) browserEnv.DISPLAY = display
+    const browserEnv = browserEnvironment(display)
     context = await Camoufox({
       config: identity.config,
       user_data_dir: settings.profile,

@@ -75,6 +75,21 @@ export function resolveSettings(input: SettingsInput = {}, env = process.env): B
   }
 }
 
+export function browserEnvironment(display: string | undefined, env = process.env) {
+  const result = Object.fromEntries(
+    Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  )
+  if (!display) return result
+
+  delete result.WAYLAND_DISPLAY
+  delete result.WAYLAND_SOCKET
+  result.DISPLAY = display
+  result.MOZ_ENABLE_WAYLAND = "0"
+  result.GDK_BACKEND = "x11"
+  result.XDG_SESSION_TYPE = "x11"
+  return result
+}
+
 export async function loadSettings(argv = process.argv.slice(2), env = process.env) {
   let input: SettingsInput = {}
   const configIndex = argv.indexOf("--config")
