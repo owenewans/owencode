@@ -59,22 +59,30 @@ type StreamResult = {
   stderr: string
 }
 
-const GUARD = [
-  'root=$(realpath -m -- "$1")',
-  'target=$(realpath -m -- "$2")',
-  'case "$root" in /) ;; *)',
-  '  case "$target" in "$root"|"$root"/*) ;; *)',
-  '    printf "remote path resolves outside configured root: %s\\n" "$2" >&2; exit 77;;',
-  "  esac",
-  ";; esac",
-].join("\n")
+// A dangling symlink is not "missing": replacing it would still clobber a name
+// the caller can see, so existence is tested with -e or -L everywhere.
+const EXISTS = (variable: string) => `{ [ -e "${variable}" ] || [ -L "${variable}" ]; }`
 
 function remoteCommand(script: string, args: string[]) {
   return `sh -c ${shellQuote(script)} sh ${args.map(shellQuote).join(" ")}`
 }
 
-function stagingPath(target: string) {
-  return `${target}.owencode-${process.pid}-${randomBytes(6).toString("hex")}`
+function stagingPath(target: string, kind = "staging") {
+  return `${target}.owencode-${kind}-${process.pid}-${randomBytes(6).toString("hex")}`
+}
+
+// Rename the old tree aside instead of deleting it, so a failure between the
+// two renames leaves a complete copy rather than nothing at all.
+async function install(staging: string, destination: string, replacing: boolean) {
+  const backup = replacing ? stagingPath(destination, "backup") : undefined
+  if (backup) await rename(destination, backup)
+  try {
+    await rename(staging, destination)
+  } catch (error) {
+    if (backup) await rename(backup, destination).catch(() => undefined)
+    throw error
+  }
+  if (backup) await rm(backup, { recursive: true, force: true }).catch(() => undefined)
 }
 
 export function localTransferPath(directory: string, value: string) {
@@ -225,16 +233,15 @@ function spawnStream(options: StreamOptions): Promise<StreamResult> {
 export async function probeRemote(transport: TransferTransport, remotePath: string, signal?: AbortSignal): Promise<RemoteEntry> {
   const script = [
     "set -eu",
-    GUARD,
-    'if [ -d "$2" ]; then printf "directory 0 %s\\n" "$(stat -c %a -- "$2")"',
-    'elif [ -f "$2" ]; then printf "file %s %s\\n" "$(stat -c %s -- "$2")" "$(stat -c %a -- "$2")"',
-    'elif [ -e "$2" ]; then printf "other 0 0\\n"',
+    'if [ -d "$1" ]; then printf "directory 0 %s\\n" "$(stat -c %a -- "$1")"',
+    'elif [ -f "$1" ]; then printf "file %s %s\\n" "$(stat -c %s -- "$1")" "$(stat -c %a -- "$1")"',
+    'elif [ -e "$1" ] || [ -L "$1" ]; then printf "other 0 0\\n"',
     'else printf "missing 0 0\\n"',
     "fi",
   ].join("\n")
   const result = await sshStream({
     transport,
-    command: remoteCommand(script, [transport.root, remotePath]),
+    command: remoteCommand(script, [remotePath]),
     maxBytes: 4096,
     signal,
     timeout: 60_000,
@@ -251,17 +258,21 @@ export async function probeRemote(transport: TransferTransport, remotePath: stri
 function uploadFileScript() {
   return [
     "set -eu",
-    GUARD,
-    'if [ "$3" != "1" ] && [ -e "$2" ]; then printf "remote path already exists: %s\\n" "$2" >&2; exit 73; fi',
-    'if [ -d "$2" ]; then printf "remote path is a directory: %s\\n" "$2" >&2; exit 73; fi',
-    'mkdir -p -- "$4"',
+    'destination="$1"; overwrite="$2"; parent="$3"; staging="$4"; mode="$5"; size="$6"',
+    `if [ "$overwrite" != "1" ] && ${EXISTS("$destination")}; then`,
+    '  printf "remote path already exists: %s\\n" "$destination" >&2; exit 73',
+    "fi",
+    'if [ -d "$destination" ]; then printf "remote path is a directory: %s\\n" "$destination" >&2; exit 73; fi',
+    'mkdir -p -- "$parent"',
     "umask 077",
-    'trap \'rm -f -- "$5"\' EXIT HUP INT TERM',
-    'cat > "$5"',
-    'received=$(stat -c %s -- "$5")',
-    '[ "$received" = "$7" ] || { printf "upload truncated: expected %s bytes, stored %s\\n" "$7" "$received" >&2; exit 75; }',
-    'chmod "$6" -- "$5"',
-    'mv -f -- "$5" "$2"',
+    "trap 'rm -f -- \"$staging\"' EXIT HUP INT TERM",
+    'cat > "$staging"',
+    'received=$(stat -c %s -- "$staging")',
+    '[ "$received" = "$size" ] || { printf "upload truncated: expected %s bytes, stored %s\\n" "$size" "$received" >&2; exit 75; }',
+    'chmod "$mode" -- "$staging"',
+    // -T keeps a directory that appeared at the destination from swallowing the
+    // upload and reporting success.
+    'mv -fT -- "$staging" "$destination"',
     "trap - EXIT HUP INT TERM",
   ].join("\n")
 }
@@ -269,36 +280,46 @@ function uploadFileScript() {
 function uploadDirectoryScript() {
   return [
     "set -eu",
-    GUARD,
-    'if [ "$3" != "1" ] && [ -e "$2" ]; then printf "remote path already exists: %s\\n" "$2" >&2; exit 73; fi',
-    'if [ -e "$2" ] && [ ! -d "$2" ]; then printf "remote path is not a directory: %s\\n" "$2" >&2; exit 73; fi',
-    'mkdir -p -- "$5"',
+    'destination="$1"; overwrite="$2"; staging="$3"; parent="$4"; backup="$5"',
+    `if [ "$overwrite" != "1" ] && ${EXISTS("$destination")}; then`,
+    '  printf "remote path already exists: %s\\n" "$destination" >&2; exit 73',
+    "fi",
+    `if ${EXISTS("$destination")} && [ ! -d "$destination" ]; then`,
+    '  printf "remote path is not a directory: %s\\n" "$destination" >&2; exit 73',
+    "fi",
+    'mkdir -p -- "$parent"',
     "umask 077",
-    'rm -rf -- "$4"',
-    'mkdir -- "$4"',
-    'trap \'rm -rf -- "$4"\' EXIT HUP INT TERM',
-    'tar -xf - -C "$4"',
-    'if [ -e "$2" ]; then rm -rf -- "$2"; fi',
-    'mv -- "$4" "$2"',
-    "trap - EXIT HUP INT TERM",
+    'rm -rf -- "$staging" "$backup"',
+    'mkdir -- "$staging"',
+    "trap 'rm -rf -- \"$staging\"' EXIT HUP INT TERM",
+    'tar -xf - -C "$staging"',
+    // The previous tree is renamed aside rather than deleted, so an interrupted
+    // replacement can still be rolled back instead of losing both copies.
+    "saved=0",
+    `if ${EXISTS("$destination")}; then`,
+    '  mv -T -- "$destination" "$backup"',
+    "  saved=1",
+    "fi",
+    'if mv -T -- "$staging" "$destination"; then',
+    '  if [ "$saved" = "1" ]; then rm -rf -- "$backup"; fi',
+    "  trap - EXIT HUP INT TERM",
+    "else",
+    '  if [ "$saved" = "1" ]; then mv -T -- "$backup" "$destination"; fi',
+    '  printf "failed to install the uploaded directory; the previous contents were restored\\n" >&2',
+    "  exit 76",
+    "fi",
   ].join("\n")
 }
 
 function downloadFileScript() {
-  return [
-    "set -eu",
-    GUARD,
-    'test -f "$2" || { printf "remote file not found: %s\\n" "$2" >&2; exit 44; }',
-    'exec cat -- "$2"',
-  ].join("\n")
+  return ["set -eu", 'test -f "$1" || { printf "remote file not found: %s\\n" "$1" >&2; exit 44; }', 'exec cat -- "$1"'].join("\n")
 }
 
 function downloadDirectoryScript() {
   return [
     "set -eu",
-    GUARD,
-    'test -d "$2" || { printf "remote directory not found: %s\\n" "$2" >&2; exit 44; }',
-    'exec tar -cf - -C "$2" .',
+    'test -d "$1" || { printf "remote directory not found: %s\\n" "$1" >&2; exit 44; }',
+    'exec tar -cf - -C "$1" .',
   ].join("\n")
 }
 
@@ -335,11 +356,11 @@ async function upload(transport: TransferTransport, request: TransferRequest): P
       const result = await sshStream({
         transport,
         command: remoteCommand(uploadDirectoryScript(), [
-          transport.root,
           request.remotePath,
           overwrite,
           stagingPath(request.remotePath),
           path.posix.dirname(request.remotePath),
+          stagingPath(request.remotePath, "backup"),
         ]),
         source: tar.child.stdout!,
         maxBytes: transport.maxTransferBytes,
@@ -359,7 +380,6 @@ async function upload(transport: TransferTransport, request: TransferRequest): P
   const result = await sshStream({
     transport,
     command: remoteCommand(uploadFileScript(), [
-      transport.root,
       request.remotePath,
       overwrite,
       path.posix.dirname(request.remotePath),
@@ -394,7 +414,7 @@ async function download(transport: TransferTransport, request: TransferRequest):
       const result = await withTar(tar, "local tar", async () => {
         const stream = await sshStream({
           transport,
-          command: remoteCommand(downloadDirectoryScript(), [transport.root, request.remotePath]),
+          command: remoteCommand(downloadDirectoryScript(), [request.remotePath]),
           destination: tar.child.stdin!,
           maxBytes: transport.maxTransferBytes,
           signal: request.signal,
@@ -403,8 +423,7 @@ async function download(transport: TransferTransport, request: TransferRequest):
         if (stream.exitCode !== 0) throw new Error(stream.stderr.trim() || "remote download failed")
         return stream
       })
-      if (existing) await rm(request.localPath, { recursive: true, force: true })
-      await rename(staging, request.localPath)
+      await install(staging, request.localPath, Boolean(existing))
       return { bytes: result.bytes, kind: "directory" }
     } finally {
       await rm(staging, { recursive: true, force: true }).catch(() => undefined)
@@ -420,7 +439,7 @@ async function download(transport: TransferTransport, request: TransferRequest):
   try {
     const result = await sshStream({
       transport,
-      command: remoteCommand(downloadFileScript(), [transport.root, request.remotePath]),
+      command: remoteCommand(downloadFileScript(), [request.remotePath]),
       destination: createWriteStream(temporary, { mode: 0o600 }),
       maxBytes: transport.maxTransferBytes,
       signal: request.signal,

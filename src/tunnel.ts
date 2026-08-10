@@ -152,6 +152,12 @@ export class TunnelManager {
         throw new Error(`a tunnel already binds ${request.bindHost}:${request.bindPort}`)
       }
     }
+    // A port that already answers would make the readiness probe succeed on a
+    // listener that is not ours, so refuse before ssh is even started rather
+    // than reporting someone else's service as a verified tunnel.
+    if (request.type !== "remote" && (await probe(request.bindHost, request.bindPort, 500))) {
+      throw new Error(`${request.bindHost}:${request.bindPort} is already in use by another process`)
+    }
     this.hook()
     const child = spawn(
       this.transport.sshBinary,
@@ -179,15 +185,17 @@ export class TunnelManager {
       exited: false,
       closed: Promise.resolve(),
     }
+    // A tunnel that dies on its own must leave the registry, otherwise list()
+    // reports a forward that is gone and open() refuses to rebind the port.
+    const retire = (resolve: () => void) => () => {
+      entry.exited = true
+      entry.record.verified = false
+      if (this.tunnels.get(id) === entry) this.tunnels.delete(id)
+      resolve()
+    }
     entry.closed = new Promise<void>((resolve) => {
-      child.once("close", () => {
-        entry.exited = true
-        resolve()
-      })
-      child.once("error", () => {
-        entry.exited = true
-        resolve()
-      })
+      child.once("close", retire(resolve))
+      child.once("error", retire(resolve))
     })
     child.stderr.on("data", (chunk: Buffer) => {
       entry.stderr = `${entry.stderr}${chunk.toString("utf8")}`.slice(-4096)
@@ -223,6 +231,8 @@ export class TunnelManager {
       throw error
     }
 
+    // The process can still have died between the readiness check and here.
+    if (entry.exited) throw fail("ssh tunnel exited before it could be registered")
     this.tunnels.set(id, entry)
     child.unref()
     ;(child.stderr as unknown as { unref?: () => void }).unref?.()

@@ -115,4 +115,41 @@ describe("ssh tunnel", () => {
       manager.open({ type: "local", bindHost: "127.0.0.1", bindPort: 45999, destinationHost: "127.0.0.1", destinationPort: 1 }, 3000),
     ).rejects.toThrow("permission denied")
   })
+
+  // Without this check the readiness probe connects to the foreign listener and
+  // reports someone else's service as a verified tunnel.
+  it("refuses a port that another process already owns", async () => {
+    const port = await freePort()
+    const foreign = net.createServer((socket) => socket.end())
+    await new Promise<void>((resolve) => foreign.listen(port, "127.0.0.1", resolve))
+    try {
+      const manager = fakeSsh("sleep 5")
+      await expect(
+        manager.open({ type: "local", bindHost: "127.0.0.1", bindPort: port, destinationHost: "127.0.0.1", destinationPort: 1 }, 3000),
+      ).rejects.toThrow("already in use")
+      expect(manager.list()).toHaveLength(0)
+    } finally {
+      await new Promise<void>((resolve) => foreign.close(() => resolve()))
+    }
+  })
+
+  it("drops a tunnel from the registry when it dies on its own", async () => {
+    const port = await freePort()
+    const listen = `require("net").createServer().listen(${port}, "127.0.0.1"); setTimeout(() => process.exit(0), 250)`
+    const manager = fakeSsh(`exec ${process.execPath} -e '${listen}'`)
+    const record = await manager.open(
+      { type: "local", bindHost: "127.0.0.1", bindPort: port, destinationHost: "127.0.0.1", destinationPort: 1 },
+      5000,
+    )
+    expect(manager.list()).toHaveLength(1)
+
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    expect(manager.list()).toHaveLength(0)
+    // The port has to be rebindable once the dead entry is gone.
+    const revived = fakeTunnel(port)
+    await expect(
+      revived.open({ type: "local", bindHost: "127.0.0.1", bindPort: port, destinationHost: "127.0.0.1", destinationPort: 1 }, 5000),
+    ).resolves.toMatchObject({ verified: true })
+    expect(await manager.close(record.id)).toBe(false)
+  })
 })

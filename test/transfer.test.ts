@@ -93,6 +93,52 @@ describe("ssh transfer", () => {
     expect((await readFile(target)).equals(binary)).toBe(true)
   })
 
+  // The old tree is renamed aside instead of deleted, so a failure at the exact
+  // moment the new tree is installed can no longer leave the caller with
+  // neither copy. The failure is injected precisely there with a stub mv.
+  it("keeps the previous directory intact when the install itself fails", async () => {
+    const root = await workspace()
+    const bin = await mkdtemp(path.join(os.tmpdir(), "owencode-bin-"))
+    directories.push(bin)
+    await writeFile(
+      path.join(bin, "mv"),
+      ['#!/bin/sh', 'for a in "$@"; do case "$a" in *owencode-staging-*) exit 1;; esac; done', 'exec /bin/mv "$@"'].join("\n"),
+      { mode: 0o755 },
+    )
+    const sabotaged: TransferTransport = {
+      ...transport(root),
+      sshArgs: ["-c", `PATH=${bin}:$PATH exec /bin/sh -c "$2"`, "owencode-test"],
+    }
+
+    const source = path.join(root, "new")
+    const target = path.join(root, "live")
+    await mkdir(source, { recursive: true })
+    await writeFile(path.join(source, "fresh.txt"), "fresh")
+    await mkdir(target, { recursive: true })
+    await writeFile(path.join(target, "irreplaceable.txt"), "keep me")
+
+    await expect(
+      transfer(sabotaged, { direction: "upload", localPath: source, remotePath: target, recursive: true, overwrite: true }),
+    ).rejects.toThrow()
+
+    expect(await readFile(path.join(target, "irreplaceable.txt"), "utf8")).toBe("keep me")
+  })
+
+  it("replaces a directory without leaving staging or backup entries behind", async () => {
+    const root = await workspace()
+    const source = path.join(root, "new")
+    const target = path.join(root, "live")
+    await mkdir(source, { recursive: true })
+    await writeFile(path.join(source, "fresh.txt"), "fresh")
+    await mkdir(target, { recursive: true })
+    await writeFile(path.join(target, "stale.txt"), "stale")
+
+    await transfer(transport(root), { direction: "upload", localPath: source, remotePath: target, recursive: true, overwrite: true })
+
+    expect(await readdir(target)).toEqual(["fresh.txt"])
+    expect((await readdir(root)).filter((entry) => entry.includes("owencode-"))).toEqual([])
+  })
+
   it("transfers directory trees in both directions", async () => {
     const root = await workspace()
     const tree = path.join(root, "tree")
@@ -220,9 +266,10 @@ describe("ssh transfer", () => {
     expect(await readdir(root)).toEqual([])
   })
 
-  it("confines remote paths to the configured root", async () => {
+  it("reports a dangling symlink as present so a replacement cannot go unnoticed", async () => {
     const root = await workspace()
-    await expect(probeRemote(transport(root), "/etc/passwd")).rejects.toThrow("outside configured root")
+    await symlink(path.join(root, "absent"), path.join(root, "dangling"))
+    await expect(probeRemote(transport(root), path.join(root, "dangling"))).resolves.toMatchObject({ kind: "other" })
   })
 
   it("reports missing remote files", async () => {

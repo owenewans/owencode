@@ -43,7 +43,7 @@ the plugin uses the system `ssh` executable. `~/.ssh/config`, ssh-agent, `Identi
 
 every tool call used to open its own ssh connection. a full handshake costs about 130 ms of pure cpu even at zero network latency, plus three to four round trips on the wire, so a single remote read could cost a quarter of a second before doing any work. the plugin now enables connection multiplexing by default: the first call establishes a master and every later call opens a channel on it, which costs process spawn plus roughly one round trip. `ControlMaster=auto` means a missing or dead master degrades to an ordinary connection instead of failing.
 
-the control socket is a credential. anyone able to write to it gets an authenticated session on the remote host without presenting a key, so it is created inside `$XDG_RUNTIME_DIR/owencode` with mode `0700`, ownership is verified, loose permissions are repaired, and `/tmp` is only used as a fallback in a uid-scoped `0700` directory. the path uses ssh's `%C` hash, which also keeps it under the 108 byte unix socket limit. because all channels share one connection they also share the server's `MaxSessions`, which defaults to 10, so the plugin serialises remote work through a semaphore capped at `maxSessions`. long lived `ssh_tunnel` forwards deliberately opt out with `ControlMaster=no`, otherwise an expiring master would take every open tunnel down with it.
+the control socket is a credential. anyone able to write to it gets an authenticated session on the remote host without presenting a key, so it is created inside `$XDG_RUNTIME_DIR/owencode` with mode `0700`, ownership is verified, loose permissions are repaired, and the directory is rejected rather than followed if anything has planted a symlink there. `/tmp` is only used as a fallback, through `mkdtemp`, because a predictable name in a world writable directory can be pre-created by another user. the socket path is checked against the 108 byte unix socket limit using the 40 character string ssh actually substitutes for `%C`. because all channels share one connection they also share the server's `MaxSessions`, which defaults to 10, so the plugin serialises remote work through a semaphore capped at `maxSessions`. long lived `ssh_tunnel` forwards deliberately opt out with `ControlMaster=no`, otherwise an expiring master would take every open tunnel down with it.
 
 the github tool uses the local authenticated `gh` executable without a shell. `gh auth token` is blocked so credentials cannot be printed into model context.
 
@@ -156,15 +156,15 @@ the generated Camoufox identity is stored with mode `0600` inside the profile an
 
 `controlMaster` turns multiplexing off when set to `false`, which is worth doing if the remote sshd forbids it or you are debugging a connection. `maxSessions` must stay at or below the server's `MaxSessions`.
 
-setting `root` to `/` asks for no path confinement at all, and the guards are written to skip in that case because confining to `/` is a contradiction. that is a legitimate choice for a dedicated host, but it must be stated: the plugin refuses to load with `root: "/"` unless `unconfined` is also `true`, so a config can never disable the plugin's own guarantees silently.
+`root` is where relative paths are resolved, not a sandbox. an absolute path is used exactly as given, and the tools reach whatever the remote account can reach. this is deliberate: a path check that a symlink defeats is worse than no check, because it reads like a boundary while behaving like a suggestion.
 
-independently of `root`, the structured tools refuse paths that exist only to hold credentials: anything under `.ssh` or `.gnupg`, `authorized_keys`, private key files, `/etc/shadow`, `/etc/gshadow`, `/etc/sudoers` and `sudoers.d`, `.aws/credentials`, `.config/gh/hosts.yml`, `.docker/config.json`, `.kube/config`, `.git-credentials`, `.netrc`, `.pgpass`, `.npmrc`, and `.env` files. `.env.example`, `.env.sample` and `.env.template` stay readable because they hold no secrets. this applies to `ssh_read`, `ssh_write`, `ssh_edit`, `ssh_apply_patch` and both directions of `ssh_transfer`, and `ssh_glob` and `ssh_grep` pass the same list to ripgrep as exclusions so a recursive search cannot surface key material it was not asked for. `allowSensitivePaths: true` turns it off when the task genuinely is credential management.
+the boundary is the approval prompt. every call that reads, writes, executes, transfers or forwards goes through opencode's permission system, and the whole command, path or diff is shown before it runs. set the mutating tools to `ask` and decide per call; nothing in the plugin decides on your behalf.
 
-this is a blast-radius control, not a sandbox. it exists because the model reads untrusted text from `web_search`, `webfetch` and browser pages, and a path denylist is one of the few defences that survives an injected instruction. `ssh_bash` is not covered: an approved shell command can read anything the remote account can.
+what the plugin still guarantees is narrower and honest: no path or command is ever interpolated into a shell string unquoted, writes are atomic and verified against a hash taken when the file was read, directory replacement renames the previous copy aside instead of deleting it, output is size limited, and the ssh control socket is created so that no other local user can reach it.
 
-`host` is an alias from `~/.ssh/config`. `root` is an absolute directory on that host. structured file-tool paths and the initial `ssh_bash` working directory are confined to `root`. an approved `ssh_bash` command still has every permission of the remote ssh account and is not a sandbox.
+`host` is an alias from `~/.ssh/config`. `root` is an absolute directory on that host: it is the default working directory for `ssh_bash` and the base a relative path is resolved against. an absolute path is honoured as written. every tool call runs with the full permissions of the remote ssh account.
 
-`ssh_transfer` streams raw bytes through the same ssh transport instead of encoding them as text, so executables, archives and images arrive unchanged and the executable bit is preserved in both directions. nothing is buffered in model context and the payload never passes through the language model. remote paths stay confined to `root`, and an existing destination is refused unless `overwrite` is set.
+`ssh_transfer` streams raw bytes through the same ssh transport instead of encoding them as text, so executables, archives and images arrive unchanged and the executable bit is preserved in both directions. nothing is buffered in model context and the payload never passes through the language model. an existing destination is refused unless `overwrite` is set, and replacing a directory renames the previous one aside and only removes it once the new tree is in place, so an interrupted transfer cannot leave you with neither copy.
 
 single files land on a temporary name first; the receiving side compares the stored size against the expected size and refuses to commit a truncated file, so a dropped connection cannot leave a half written binary in place. recursive transfers stream a `tar` pipe into a fresh staging directory and only then replace the destination, which means a symlink already present at the destination is never followed and a hostile archive cannot write outside it. gnu tar additionally refuses `..` members and strips absolute paths. both the tar process and the ssh process must exit cleanly, otherwise the transfer is reported as failed rather than silently truncated. a recursive transfer with `overwrite` replaces the destination directory instead of merging into it.
 
@@ -205,9 +205,7 @@ options:
   "maxTransferBytes": 268435456,
   "controlMaster": true,
   "controlPersist": "60s",
-  "maxSessions": 8,
-  "allowSensitivePaths": false,
-  "unconfined": false
+  "maxSessions": 8
 }
 ```
 

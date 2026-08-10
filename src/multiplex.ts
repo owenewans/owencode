@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, statSync } from "node:fs"
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
@@ -8,36 +8,54 @@ export type MultiplexSettings = {
   maxSessions: number
 }
 
-// A unix socket path cannot exceed sun_path, which is 108 bytes on Linux and
-// 104 on macOS. ssh expands %C to a 40 character hash, so the directory has to
-// stay well below that ceiling or the master silently fails to bind.
-const SOCKET_PATH_LIMIT = 100
+// A unix socket path cannot exceed sun_path: 108 bytes on Linux, 104 on macOS,
+// including the terminating NUL. ssh expands %C to a 40 character hash, so the
+// expansion has to be measured, not the two character placeholder.
+const SOCKET_PATH_LIMIT = process.platform === "darwin" ? 103 : 107
+const EXPANDED = "0".repeat(40)
+
+function fits(directory: string) {
+  return Buffer.byteLength(path.join(directory, EXPANDED)) <= SOCKET_PATH_LIMIT
+}
 
 let cached: string | undefined | null = null
 
-function usable(directory: string) {
+// $XDG_RUNTIME_DIR is created by the system for this user alone, so a directory
+// underneath it cannot be pre-created by anyone else.
+function runtimeDirectory(base: string) {
+  const directory = path.join(base, "owencode")
   try {
     mkdirSync(directory, { recursive: true, mode: 0o700 })
-    const info = statSync(directory)
-    if (!info.isDirectory()) return false
-    if (typeof process.getuid === "function" && info.uid !== process.getuid()) return false
-    // Anyone able to write this socket gets an authenticated session on the
-    // remote host without presenting a credential, so group and other bits
-    // must be clear even if the directory already existed.
+    // lstat, not stat: a symlink planted here must be rejected rather than
+    // followed, because whoever can write the control socket gets an
+    // authenticated session on the remote host without presenting a credential.
+    const info = lstatSync(directory)
+    if (!info.isDirectory()) return undefined
+    if (typeof process.getuid === "function" && info.uid !== process.getuid()) return undefined
     if ((info.mode & 0o077) !== 0) chmodSync(directory, 0o700)
-    return path.join(directory, "%C").length <= SOCKET_PATH_LIMIT
+    return fits(directory) ? directory : undefined
   } catch {
-    return false
+    return undefined
+  }
+}
+
+// The fallback lives in a world writable /tmp, where a predictable name can be
+// pre-created as a symlink by any local user. mkdtemp creates the directory
+// atomically under a name nobody can guess, so there is nothing to hijack.
+function temporaryDirectory() {
+  try {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "owencode-"))
+    chmodSync(directory, 0o700)
+    return fits(directory) ? directory : undefined
+  } catch {
+    return undefined
   }
 }
 
 export function socketDirectory(): string | undefined {
   if (cached !== null) return cached
-  const candidates = [
-    process.env.XDG_RUNTIME_DIR ? path.join(process.env.XDG_RUNTIME_DIR, "owencode") : undefined,
-    path.join(os.tmpdir(), `owencode-${typeof process.getuid === "function" ? process.getuid() : "user"}`),
-  ].filter((item): item is string => Boolean(item))
-  cached = candidates.find(usable)
+  const base = process.env.XDG_RUNTIME_DIR
+  cached = (base ? runtimeDirectory(base) : undefined) ?? temporaryDirectory()
   return cached
 }
 

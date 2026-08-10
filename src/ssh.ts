@@ -127,38 +127,14 @@ export class SshClient {
     return this.run(command, { ...options, input: script })
   }
 
-  private guardScript(targetVariable = "$target") {
-    return [
-      `case ${shellQuote(this.options.root)} in /) ;; *)`,
-      `  root=$(realpath -m -- ${shellQuote(this.options.root)})`,
-      `  target=$(realpath -m -- "${targetVariable}")`,
-      `  case "$target" in "$root"|"$root"/*) ;; *) printf "remote path resolves outside configured root: %s\\n" "${targetVariable}" >&2; exit 77;; esac`,
-      ";; esac",
-    ].join("\n")
-  }
-
   async textFile(filePath: string, signal?: AbortSignal): Promise<string> {
     const result = await this.script(
-      `${this.guardScript("$1")}\ntest -f "$1" || { printf "not a regular file: %s\\n" "$1" >&2; exit 44; }\ncat -- "$1"\n`,
+      `test -f "$1" || { printf "not a regular file: %s\\n" "$1" >&2; exit 44; }\ncat -- "$1"\n`,
       [filePath],
       { signal },
     )
     if (result.exitCode !== 0) throw new Error(result.stderr.trim() || `failed to read ${filePath}`)
     return result.stdout.toString("utf8")
-  }
-
-  async guardPath(root: string, filePath: string, signal?: AbortSignal) {
-    const script = [
-      "set -eu",
-      'root=$(realpath -m -- "$1")',
-      'target=$(realpath -m -- "$2")',
-      'case "$root" in /) exit 0;; esac',
-      'case "$target" in "$root"|"$root"/*) exit 0;; esac',
-      'printf "remote path resolves outside configured root: %s\\n" "$2" >&2',
-      "exit 77",
-    ].join("\n")
-    const result = await this.script(script, [root, filePath], { signal })
-    if (result.exitCode !== 0) throw new Error(result.stderr.trim() || `remote path escaped ${root}`)
   }
 
   async writeFile(filePath: string, content: string, expectedHash: string | undefined, signal?: AbortSignal) {
@@ -171,7 +147,6 @@ export class SshClient {
       'parent="$2"',
       'temporary="$3"',
       'expected="$4"',
-      this.guardScript("$destination"),
       'mkdir -p -- "$parent"',
       'if [ "$expected" = "missing" ] && [ -e "$destination" ]; then echo "remote file already exists" >&2; exit 73; fi',
       'if [ "$expected" != "-" ] && [ "$expected" != "missing" ]; then',
@@ -193,8 +168,6 @@ export class SshClient {
   async deleteFile(filePath: string, expectedHash: string, signal?: AbortSignal) {
     const script = [
       "set -eu",
-      'target="$1"',
-      this.guardScript("$target"),
       'actual=$(sha256sum -- "$1" 2>/dev/null | cut -d " " -f 1 || true)',
       '[ "$actual" = "$2" ] || { echo "remote file changed after it was read" >&2; exit 74; }',
       'rm -- "$1"',

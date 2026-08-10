@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat } from "node:fs/promises"
+import { lstat, mkdtemp, rm, stat, symlink } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -47,15 +47,42 @@ describe("ssh multiplexing", () => {
     expect((await stat(directory!)).mode & 0o777).toBe(0o700)
   })
 
-  it("rejects a socket path that would exceed the unix socket limit", async () => {
-    const base = await mkdtemp(path.join(os.tmpdir(), `owencode-${"x".repeat(90)}-`))
+  it("measures the expanded %C hash, not the placeholder, against sun_path", async () => {
+    // 60 characters leaves room for "/%C" as two characters but not for the
+    // 40 character hash ssh actually substitutes.
+    const base = await mkdtemp(path.join(os.tmpdir(), `owencode-${"x".repeat(60)}-`))
     directories.push(base)
     process.env.XDG_RUNTIME_DIR = base
     resetSocketDirectory()
 
-    // Falls back to the shorter tmpdir candidate rather than silently
-    // producing a socket path that ssh cannot bind.
-    expect(socketDirectory()).not.toBe(path.join(base, "owencode"))
+    const directory = socketDirectory()
+    expect(directory).not.toBe(path.join(base, "owencode"))
+    expect(path.join(directory!, "0".repeat(40)).length).toBeLessThanOrEqual(107)
+  })
+
+  it("does not follow a symlink planted at the socket directory", async () => {
+    const base = await mkdtemp(path.join(os.tmpdir(), "owencode-xdg-"))
+    const elsewhere = await mkdtemp(path.join(os.tmpdir(), "owencode-target-"))
+    directories.push(base, elsewhere)
+    await symlink(elsewhere, path.join(base, "owencode"))
+    process.env.XDG_RUNTIME_DIR = base
+    resetSocketDirectory()
+
+    const directory = socketDirectory()
+    expect(directory).not.toBe(path.join(base, "owencode"))
+    expect((await lstat(directory!)).isSymbolicLink()).toBe(false)
+  })
+
+  it("falls back to an unguessable directory rather than a predictable name in tmp", async () => {
+    delete process.env.XDG_RUNTIME_DIR
+    resetSocketDirectory()
+
+    const directory = socketDirectory()!
+    directories.push(directory)
+    expect(directory.startsWith(path.join(os.tmpdir(), "owencode-"))).toBe(true)
+    expect(directory).not.toBe(path.join(os.tmpdir(), `owencode-${process.getuid?.()}`))
+    expect((await lstat(directory)).isSymbolicLink()).toBe(false)
+    expect((await stat(directory)).mode & 0o777).toBe(0o700)
   })
 
   it("never exceeds the configured concurrency", async () => {

@@ -7,7 +7,6 @@ import { parseGitCommand, renderGitCommand, runGit } from "./git.js"
 import { parseGhCommand, renderGhCommand, runGh } from "./github.js"
 import { applyChunks, parsePatch, type PatchOperation } from "./patch.js"
 import { ENGINE_NAMES, redactProxy, renderReport, resolveSearchSettings, webSearch, type EngineName } from "./search/index.js"
-import { assertNotSensitive, sensitiveGlobs } from "./sensitive.js"
 import { sha256, shellQuote, SshClient } from "./ssh.js"
 import { localTransferPath, transfer, type TransferTransport } from "./transfer.js"
 import { describeTunnel, isLoopback, TunnelManager } from "./tunnel.js"
@@ -75,43 +74,31 @@ const Owencode = (async (_input, rawOptions) => {
   const tunnels = new TunnelManager({ sshBinary: options.sshBinary, sshArgs: options.sshArgs, host: options.host })
   const scoped = (value: string) => remotePath(options.root, value)
   const permissionPath = (value: string) => `${options.host}:${display(options.root, value)}`
-  const guardSensitive = (value: string, action: string) => {
-    assertNotSensitive(value, action, options.allowSensitivePaths)
-    return value
-  }
-  const excludeGlobs = options.allowSensitivePaths
-    ? ""
-    : sensitiveGlobs()
-        .map((glob) => `-g ${shellQuote(glob)}`)
-        .join(" ")
 
   return {
     tool: {
       ssh_read: tool({
-        description: "Read a UTF-8 file or list a directory on the configured SSH host. Paths are remote and confined to the configured root.",
+        description: "Read a UTF-8 file or list a directory on the configured SSH host. Paths are remote; a relative path resolves against the configured root.",
         args: {
-          filePath: tool.schema.string().describe("Absolute remote path or path relative to the configured root"),
+          filePath: tool.schema.string().describe("Absolute remote path, or a path relative to the configured root"),
           offset: tool.schema.number().int().nonnegative().optional().describe("One-based line to start from"),
           limit: tool.schema.number().int().positive().optional().describe("Maximum number of lines, default 2000"),
         },
         async execute(args, ctx) {
-          const filePath = guardSensitive(scoped(args.filePath), "ssh_read")
+          const filePath = scoped(args.filePath)
           await approve(ctx, "ssh_read", permissionPath(filePath), { host: options.host, filePath })
           const result = await ssh.script(
             [
-              'root=$(realpath -m -- "$1")',
-              'target=$(realpath -m -- "$2")',
-              'case "$root" in /) ;; *) case "$target" in "$root"|"$root"/*) ;; *) echo "remote path resolves outside configured root" >&2; exit 77;; esac;; esac',
-              'if [ -d "$2" ]; then',
+              'if [ -d "$1" ]; then',
               '  printf "D\\0"',
-              '  find "$2" -mindepth 1 -maxdepth 1 -printf "%f\\n" | LC_ALL=C sort',
-              'elif [ -f "$2" ]; then',
+              '  find "$1" -mindepth 1 -maxdepth 1 -printf "%f\\n" | LC_ALL=C sort',
+              'elif [ -f "$1" ]; then',
               '  printf "F\\0"',
-              "  awk -v start=\"$3\" -v limit=\"$4\" 'NR >= start { printf \"%d: %s\\n\", NR, $0; count++ } count >= limit { exit }' \"$2\"",
-              'else printf "path not found: %s\\n" "$2" >&2; exit 44',
+              "  awk -v start=\"$2\" -v limit=\"$3\" 'NR >= start { printf \"%d: %s\\n\", NR, $0; count++ } count >= limit { exit }' \"$1\"",
+              'else printf "path not found: %s\\n" "$1" >&2; exit 44',
               "fi",
             ].join("\n"),
-            [options.root, filePath, String(Math.max(1, args.offset ?? 1)), String(args.limit ?? 2000)],
+            [filePath, String(Math.max(1, args.offset ?? 1)), String(args.limit ?? 2000)],
             { signal: ctx.abort },
           )
           if (result.exitCode !== 0) throw new Error(result.stderr.trim() || `failed to read ${filePath}`)
@@ -131,23 +118,19 @@ const Owencode = (async (_input, rawOptions) => {
       }),
 
       ssh_glob: tool({
-        description: "Find files by glob on the configured SSH host using remote ripgrep. Paths are confined to the configured root.",
+        description: "Find files by glob on the configured SSH host using remote ripgrep. A relative path resolves against the configured root.",
         args: {
           pattern: tool.schema.string().min(1).describe("Glob pattern, for example **/*.ts"),
-          path: tool.schema.string().optional().describe("Remote directory, default configured root"),
+          path: tool.schema.string().optional().describe("Remote directory, defaults to the configured root"),
         },
         async execute(args, ctx) {
           const base = scoped(args.path ?? ".")
-          await ssh.guardPath(options.root, base, ctx.abort)
           const pattern = `${permissionPath(base)}:${args.pattern}`
           await approve(ctx, "ssh_glob", pattern, { host: options.host, path: base, glob: args.pattern })
           const script = [
-            'root=$(realpath -m -- "$1")',
-            'target=$(realpath -m -- "$2")',
-            'case "$root" in /) ;; *) case "$target" in "$root"|"$root"/*) ;; *) exit 77;; esac;; esac',
-            `cd -- "$2" && command rg --files --hidden -g "$3" -g '!.git' ${excludeGlobs} | LC_ALL=C sort`,
+            `cd -- "$1" && command rg --files --hidden -g "$2" -g '!.git' | LC_ALL=C sort`,
           ].join("\n")
-          const result = await ssh.script(script, [options.root, base, args.pattern], { signal: ctx.abort })
+          const result = await ssh.script(script, [base, args.pattern], { signal: ctx.abort })
           if (result.exitCode > 1) throw new Error(result.stderr.trim() || "remote glob failed")
           const files = result.stdout
             .toString("utf8")
@@ -160,49 +143,41 @@ const Owencode = (async (_input, rawOptions) => {
       }),
 
       ssh_grep: tool({
-        description: "Search remote file contents with ripgrep. Paths are confined to the configured root.",
+        description: "Search remote file contents with ripgrep. A relative path resolves against the configured root.",
         args: {
           pattern: tool.schema.string().min(1).describe("Regular expression to search for"),
-          path: tool.schema.string().optional().describe("Remote file or directory, default configured root"),
+          path: tool.schema.string().optional().describe("Remote file or directory, defaults to the configured root"),
           include: tool.schema.string().optional().describe("Optional file glob such as *.ts"),
         },
         async execute(args, ctx) {
           const target = scoped(args.path ?? ".")
-          await ssh.guardPath(options.root, target, ctx.abort)
           const permission = `${permissionPath(target)}:${args.pattern}`
           await approve(ctx, "ssh_grep", permission, { host: options.host, path: target, pattern: args.pattern })
           const script = [
-            'root=$(realpath -m -- "$1")',
-            'target=$(realpath -m -- "$2")',
-            'case "$root" in /) ;; *) case "$target" in "$root"|"$root"/*) ;; *) exit 77;; esac;; esac',
-            `if [ -n "$4" ]; then command rg --line-number --no-heading --color never --hidden -g '!.git' ${excludeGlobs} -g "$4" -- "$3" "$2"`,
-            `else command rg --line-number --no-heading --color never --hidden -g '!.git' ${excludeGlobs} -- "$3" "$2"; fi`,
+            `if [ -n "$3" ]; then command rg --line-number --no-heading --color never --hidden -g '!.git' -g "$3" -- "$2" "$1"`,
+            `else command rg --line-number --no-heading --color never --hidden -g '!.git' -- "$2" "$1"; fi`,
           ].join("\n")
-          const result = await ssh.script(script, [options.root, target, args.pattern, args.include ?? ""], { signal: ctx.abort })
+          const result = await ssh.script(script, [target, args.pattern, args.include ?? ""], { signal: ctx.abort })
           if (result.exitCode > 1) throw new Error(result.stderr.trim() || "remote grep failed")
           return { title: `${options.host}: ${args.pattern}`, output: result.stdout.toString("utf8").trimEnd() || "No matches found" }
         },
       }),
 
       ssh_bash: tool({
-        description: "Execute a non-interactive shell command on the configured SSH host. The working directory is confined to the configured root.",
+        description: "Execute a non-interactive shell command on the configured SSH host. The working directory defaults to the configured root.",
         args: {
           command: tool.schema.string().min(1).describe("Shell command to execute remotely"),
           timeout: tool.schema.number().int().positive().optional().describe("Timeout in milliseconds"),
-          workdir: tool.schema.string().optional().describe("Remote working directory, default configured root"),
+          workdir: tool.schema.string().optional().describe("Remote working directory, defaults to the configured root"),
         },
         async execute(args, ctx) {
           const workdir = scoped(args.workdir ?? ".")
-          await ssh.guardPath(options.root, workdir, ctx.abort)
           const pattern = `${options.host}:${args.command}`
           await approve(ctx, "ssh_bash", pattern, { host: options.host, command: args.command, workdir })
           const script = [
-            'root=$(realpath -m -- "$1")',
-            'target=$(realpath -m -- "$2")',
-            'case "$root" in /) ;; *) case "$target" in "$root"|"$root"/*) ;; *) exit 77;; esac;; esac',
-            'cd -- "$2" && exec sh -c "$3"',
+            'cd -- "$1" && exec sh -c "$2"',
           ].join("\n")
-          const result = await ssh.script(script, [options.root, workdir, args.command], {
+          const result = await ssh.script(script, [workdir, args.command], {
             signal: ctx.abort,
             timeout: args.timeout,
           })
@@ -253,7 +228,6 @@ const Owencode = (async (_input, rawOptions) => {
         args: denoToolArgs(),
         async execute(args, ctx) {
           const workdir = scoped(args.workdir ?? ".")
-          await ssh.guardPath(options.root, workdir, ctx.abort)
           const executionHash = denoExecutionHash(args.code, args.args)
           await approve(ctx, "ssh_deno_run", `${options.host}:${workdir}:${executionHash}`, {
             host: options.host,
@@ -289,12 +263,11 @@ const Owencode = (async (_input, rawOptions) => {
       ssh_write: tool({
         description: "Create or replace a UTF-8 file atomically on the configured SSH host.",
         args: {
-          filePath: tool.schema.string().describe("Absolute remote path or path relative to the configured root"),
+          filePath: tool.schema.string().describe("Absolute remote path, or a path relative to the configured root"),
           content: tool.schema.string().describe("Complete file content"),
         },
         async execute(args, ctx) {
-          const filePath = guardSensitive(scoped(args.filePath), "ssh_write")
-          await ssh.guardPath(options.root, filePath, ctx.abort)
+          const filePath = scoped(args.filePath)
           let oldContent = ""
           let expected = "missing"
           try {
@@ -313,15 +286,14 @@ const Owencode = (async (_input, rawOptions) => {
       ssh_edit: tool({
         description: "Replace exact text in a UTF-8 file atomically on the configured SSH host.",
         args: {
-          filePath: tool.schema.string().describe("Absolute remote path or path relative to the configured root"),
+          filePath: tool.schema.string().describe("Absolute remote path, or a path relative to the configured root"),
           oldString: tool.schema.string().describe("Exact text to replace"),
           newString: tool.schema.string().describe("Replacement text"),
           replaceAll: tool.schema.boolean().optional().describe("Replace all occurrences, default false"),
         },
         async execute(args, ctx) {
           if (args.oldString === args.newString) throw new Error("oldString and newString are identical")
-          const filePath = guardSensitive(scoped(args.filePath), "ssh_edit")
-          await ssh.guardPath(options.root, filePath, ctx.abort)
+          const filePath = scoped(args.filePath)
           const oldContent = await ssh.textFile(filePath, ctx.abort)
           const count = oldContent.split(args.oldString).length - 1
           if (count === 0) throw new Error("oldString was not found in the remote file")
@@ -346,8 +318,7 @@ const Owencode = (async (_input, rawOptions) => {
           const changes: Change[] = []
           const touched = new Set<string>()
           for (const operation of operations) {
-            const sourcePath = guardSensitive(scoped(operation.path), "ssh_apply_patch")
-            await ssh.guardPath(options.root, sourcePath, ctx.abort)
+            const sourcePath = scoped(operation.path)
             const operationPaths = [sourcePath]
             if (operation.type === "update" && operation.movePath) operationPaths.push(scoped(operation.movePath))
             if (operationPaths.some((item) => touched.has(item))) {
@@ -363,8 +334,7 @@ const Owencode = (async (_input, rawOptions) => {
               changes.push({ operation, sourcePath, targetPath: sourcePath, oldContent, newContent: "", expectedHash: sha256(oldContent) })
               continue
             }
-            const targetPath = operation.movePath ? guardSensitive(scoped(operation.movePath), "ssh_apply_patch") : sourcePath
-            await ssh.guardPath(options.root, targetPath, ctx.abort)
+            const targetPath = operation.movePath ? scoped(operation.movePath) : sourcePath
             changes.push({
               operation,
               sourcePath,
@@ -401,19 +371,18 @@ const Owencode = (async (_input, rawOptions) => {
       }),
 
       ssh_transfer: tool({
-        description: "Copy files or directories between the local machine and the configured SSH host. Streams raw bytes, so binaries and archives survive intact. Remote paths are confined to the configured root.",
+        description: "Copy files or directories between the local machine and the configured SSH host. Streams raw bytes, so binaries and archives survive intact. A relative remote path resolves against the configured root.",
         args: {
           direction: tool.schema.enum(["upload", "download"]).describe("upload sends the local path to the host, download fetches the remote path"),
           localPath: tool.schema.string().min(1).describe("Local file or directory path, absolute or relative to the project directory"),
-          remotePath: tool.schema.string().min(1).describe("Remote path, absolute or relative to the configured root"),
+          remotePath: tool.schema.string().min(1).describe("Absolute remote path, or a path relative to the configured root"),
           recursive: tool.schema.boolean().optional().describe("Transfer a directory tree instead of a single file, default false"),
           overwrite: tool.schema.boolean().optional().describe("Replace an existing destination, default false"),
           timeout: tool.schema.number().int().positive().optional().describe("Timeout in milliseconds"),
         },
         async execute(args, ctx) {
-          const localPath = guardSensitive(localTransferPath(ctx.directory, args.localPath), "ssh_transfer")
-          const remoteTarget = guardSensitive(scoped(args.remotePath), "ssh_transfer")
-          await ssh.guardPath(options.root, remoteTarget, ctx.abort)
+          const localPath = localTransferPath(ctx.directory, args.localPath)
+          const remoteTarget = scoped(args.remotePath)
           const recursive = args.recursive ?? false
           const overwrite = args.overwrite ?? false
           const arrow = args.direction === "upload" ? "->" : "<-"

@@ -61,12 +61,13 @@ describe("ssh helpers", () => {
     expect(result.stdout.toString()).toBe("safe")
   })
 
-  it("rejects symlinks that resolve outside root in the same file operation", async () => {
+  it("follows symlinks like any other path", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "owencode-"))
     directories.push(directory)
-    await symlink("/etc/passwd", path.join(directory, "escape"))
+    await writeFile(path.join(directory, "target"), "content")
+    await symlink(path.join(directory, "target"), path.join(directory, "link"))
 
-    await expect(localClient(directory).textFile(path.join(directory, "escape"))).rejects.toThrow("outside configured root")
+    await expect(localClient(directory).textFile(path.join(directory, "link"))).resolves.toBe("content")
   })
 
   it("limits combined stdout and stderr", async () => {

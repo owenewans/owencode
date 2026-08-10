@@ -14,14 +14,8 @@ describe("configuration", () => {
     expect(() => parseOptions({ host: "dev", root: "srv/app" })).toThrow("absolute remote path")
   })
 
-  it("refuses an unconfined root unless it is acknowledged", () => {
-    expect(() => parseOptions({ host: "dev", root: "/" })).toThrow("disables every path guard")
-    expect(() => parseOptions({ host: "dev", root: "/../" })).toThrow("disables every path guard")
-    expect(parseOptions({ host: "dev", root: "/", unconfined: true })).toMatchObject({ root: "/", unconfined: true })
-  })
-
-  it("keeps credential protection on by default", () => {
-    expect(parseOptions({ host: "dev", root: "/srv/app" }).allowSensitivePaths).toBe(false)
+  it("accepts a root of /", () => {
+    expect(parseOptions({ host: "dev", root: "/" })).toMatchObject({ root: "/" })
   })
 
   it("validates multiplexing settings", () => {
@@ -30,11 +24,14 @@ describe("configuration", () => {
     expect(() => parseOptions({ host: "dev", root: "/srv/app", controlPersist: "forever" })).toThrow("duration")
   })
 
-  it("confines relative and absolute paths to root", () => {
+  // root is a base for relative paths, not a boundary: an absolute path is
+  // taken as given and the approval prompt is what gates the call.
+  it("resolves relative paths against root and passes absolute paths through", () => {
     expect(remotePath("/srv/app", "src/main.ts")).toBe("/srv/app/src/main.ts")
     expect(remotePath("/srv/app", "/srv/app/src/main.ts")).toBe("/srv/app/src/main.ts")
-    expect(() => remotePath("/srv/app", "../secret")).toThrow("escapes configured root")
-    expect(() => remotePath("/srv/app", "/etc/passwd")).toThrow("escapes configured root")
+    expect(remotePath("/srv/app", "../secret")).toBe("/srv/secret")
+    expect(remotePath("/srv/app", "/etc/passwd")).toBe("/etc/passwd")
     expect(remotePath("/", "/tmp/file")).toBe("/tmp/file")
+    expect(() => remotePath("/srv/app", "bad\0path")).toThrow("control character")
   })
 })
