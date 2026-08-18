@@ -1,8 +1,11 @@
 import { createHash, randomBytes } from "node:crypto"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import { runProcess, type ProcessResult } from "./process.js"
 import { shellQuote } from "./ssh.js"
 
-export type DenoRunOptions = {
+export type NodeRunOptions = {
   binary: string
   code: string
   args?: string[]
@@ -12,47 +15,31 @@ export type DenoRunOptions = {
   maxOutputBytes: number
 }
 
-export function denoArguments(args: string[] = []) {
-  if (args.some((arg) => /[\0\r\n]/.test(arg))) throw new Error("Deno script arguments cannot contain control characters")
-  return denoFileArguments("-", args)
+export function nodeFileArguments(file: string, args: string[] = []) {
+  if (args.some((arg) => /[\0\r\n]/.test(arg))) throw new Error("Node script arguments cannot contain control characters")
+  return ["--experimental-strip-types", "--no-warnings", file, ...args]
 }
 
-export function denoFileArguments(file: string, args: string[] = []) {
-  if (args.some((arg) => /[\0\r\n]/.test(arg))) throw new Error("Deno script arguments cannot contain control characters")
-  return [
-    "run",
-    "--allow-all",
-    "--allow-scripts",
-    "--quiet",
-    "--no-prompt",
-    "--no-lock",
-    "--ext=ts",
-    file,
-    ...args,
-  ]
-}
-
-export function remoteDenoJob(
+export function remoteNodeJob(
   binary: string,
   workdir: string,
   args: string[] = [],
   timeoutMs = 120_000,
   token = randomBytes(12).toString("hex"),
 ) {
-  denoFileArguments("remote.ts", args)
-  const state = `/tmp/owencode-deno-${token}`
+  const state = `/tmp/owencode-node-${token}`
   const timeoutSeconds = Math.max(1, Math.ceil(timeoutMs / 1000))
   const supervisor = [
     "set -eu",
     'workdir="$1"',
-    'deno="$2"',
+    'node="$2"',
     'state="$3"',
     'limit="$4"',
     "shift 4",
     "umask 077",
     'mkdir -- "$state"',
     'cd -- "$workdir"',
-    'temporary=$(mktemp "$workdir/.owencode-deno.XXXXXX.ts")',
+    'temporary=$(mktemp "$workdir/.owencode-node.XXXXXX.ts")',
     'printf "%s\\n" "$temporary" > "$state/temporary"',
     'child=""',
     "cleanup() {",
@@ -70,7 +57,7 @@ export function remoteDenoJob(
     "}",
     "trap cleanup EXIT HUP INT TERM",
     'cat > "$temporary"',
-    'setsid timeout --signal=TERM --kill-after=1s "$limit" env NO_COLOR=1 DENO_NO_UPDATE_CHECK=1 DENO_NO_PROMPT=1 "$deno" run --allow-all --allow-scripts --quiet --no-prompt --no-lock --ext=ts "$temporary" "$@" &',
+    'setsid timeout --signal=TERM --kill-after=1s "$limit" env NO_COLOR=1 NODE_NO_WARNINGS=1 "$node" --experimental-strip-types --no-warnings "$temporary" "$@" &',
     "child=$!",
     'printf "%s\\n" "$child" > "$state/pid"',
     'wait "$child"',
@@ -89,7 +76,7 @@ export function remoteDenoJob(
     "fi",
     'if [ -f "$state/temporary" ]; then',
     '  temporary=$(cat -- "$state/temporary")',
-    '  case "$temporary" in "$workdir"/.owencode-deno.*.ts) rm -f -- "$temporary";; esac',
+    '  case "$temporary" in "$workdir"/.owencode-node.*.ts) rm -f -- "$temporary";; esac',
     "fi",
     'rm -f -- "$state/pid" "$state/temporary"',
     'rmdir -- "$state" 2>/dev/null || true',
@@ -101,30 +88,36 @@ export function remoteDenoJob(
   }
 }
 
-export function denoEnvironment() {
+export function nodeEnvironment() {
   return {
     ...process.env,
     NO_COLOR: "1",
-    DENO_NO_UPDATE_CHECK: "1",
-    DENO_NO_PROMPT: "1",
+    NODE_NO_WARNINGS: "1",
   }
 }
 
-export function denoExecutionHash(code: string, args: string[] = []) {
+export function nodeExecutionHash(code: string, args: string[] = []) {
   return createHash("sha256").update(JSON.stringify({ code, args })).digest("hex")
 }
 
-export async function runDeno(options: DenoRunOptions): Promise<ProcessResult> {
-  if (!options.code.trim()) throw new Error("Deno source code is required")
-  return runProcess({
-    label: "Deno",
-    binary: options.binary,
-    args: denoArguments(options.args),
-    cwd: options.cwd,
-    input: options.code,
-    env: denoEnvironment(),
-    signal: options.signal,
-    timeout: options.timeout,
-    maxOutputBytes: options.maxOutputBytes,
-  })
+export async function runNode(options: NodeRunOptions): Promise<ProcessResult> {
+  if (!options.code.trim()) throw new Error("Node source code is required")
+  const directory = await mkdtemp(path.join(tmpdir(), "owencode-node-"))
+  const file = path.join(directory, "script.ts")
+  try {
+    await writeFile(file, options.code, "utf8")
+    return await runProcess({
+      label: "Node",
+      binary: options.binary,
+      args: nodeFileArguments(file, options.args),
+      cwd: options.cwd,
+      input: undefined,
+      env: nodeEnvironment(),
+      signal: options.signal,
+      timeout: options.timeout,
+      maxOutputBytes: options.maxOutputBytes,
+    })
+  } finally {
+    await rm(directory, { recursive: true, force: true }).catch(() => undefined)
+  }
 }

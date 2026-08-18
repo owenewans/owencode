@@ -2,7 +2,7 @@ import path from "node:path"
 import { createTwoFilesPatch } from "diff"
 import { tool, type Plugin, type ToolContext } from "@opencode-ai/plugin"
 import { parseOptions, remotePath } from "./config.js"
-import { denoExecutionHash, remoteDenoJob, runDeno } from "./deno.js"
+import { nodeExecutionHash, remoteNodeJob, runNode } from "./node.js"
 import { parseGitCommand, renderGitCommand, runGit } from "./git.js"
 import { parseGhCommand, renderGhCommand, runGh } from "./github.js"
 import { applyChunks, parsePatch, type PatchOperation } from "./patch.js"
@@ -38,12 +38,12 @@ function binaryOption(options: Record<string, unknown> | undefined, key: string,
   return value
 }
 
-function denoToolArgs() {
+function nodeToolArgs() {
   return {
     description: tool.schema.string().min(1).describe("Short description of what the TypeScript program does"),
-    code: tool.schema.string().min(1).describe("Complete multiline TypeScript source. The source itself consumes stdin; use Deno.args, files, fetch, or Deno.Command for additional input"),
+    code: tool.schema.string().min(1).describe("Complete multiline TypeScript source, run via Node's type-stripping (--experimental-strip-types). Use process.argv, node:fs, fetch, or node:child_process for input/IO"),
     workdir: tool.schema.string().optional().describe("Working directory, defaults to the current local or remote project directory"),
-    args: tool.schema.array(tool.schema.string()).optional().describe("Arguments exposed to the program as Deno.args"),
+    args: tool.schema.array(tool.schema.string()).optional().describe("Arguments exposed to the program via process.argv"),
     timeout: tool.schema.number().int().positive().optional().describe("Timeout in milliseconds"),
   }
 }
@@ -53,8 +53,8 @@ const Owencode = (async (_input, rawOptions) => {
   const ghBinary = binaryOption(rawOptions, "ghBinary", "gh")
   const gitBinary = binaryOption(rawOptions, "gitBinary", "git")
   const tarBinary = binaryOption(rawOptions, "tarBinary", "tar")
-  const denoBinary = binaryOption(rawOptions, "denoBinary", "deno")
-  const sshDenoBinary = binaryOption(rawOptions, "sshDenoBinary", "deno")
+  const nodeBinary = binaryOption(rawOptions, "nodeBinary", "node")
+  const sshNodeBinary = binaryOption(rawOptions, "sshNodeBinary", "node")
   const searchSettings = resolveSearchSettings(rawOptions)
   const ssh = new SshClient(options)
   const transport: TransferTransport = {
@@ -191,22 +191,22 @@ const Owencode = (async (_input, rawOptions) => {
         },
       }),
 
-      deno_run: tool({
-        description: "Execute a multiline TypeScript program locally with Deno and full permissions after approval. Uses deno run --allow-all and never invokes a shell. The source code is delivered through stdin, so the program must not try to read additional data from Deno.stdin; use Deno.args, Deno.readTextFile, fetch, or Deno.Command instead.",
-        args: denoToolArgs(),
+      node_run: tool({
+        description: "Execute a multiline TypeScript program locally with Node after approval. The source is written to a temporary .ts file and run via `node --experimental-strip-types`, never through a shell. Use process.argv, node:fs, fetch, or node:child_process for input/IO.",
+        args: nodeToolArgs(),
         async execute(args, ctx) {
           const workdir = args.workdir ? path.resolve(ctx.directory, args.workdir) : ctx.directory
-          if (/[\0\r\n]/.test(workdir)) throw new Error("Deno working directory contains a control character")
-          const executionHash = denoExecutionHash(args.code, args.args)
-          await approve(ctx, "deno_run", `${workdir}:${executionHash}`, {
+          if (/[\0\r\n]/.test(workdir)) throw new Error("Node working directory contains a control character")
+          const executionHash = nodeExecutionHash(args.code, args.args)
+          await approve(ctx, "node_run", `${workdir}:${executionHash}`, {
             description: args.description,
             workdir,
             code: args.code,
             executionHash,
             args: args.args ?? [],
           })
-          const result = await runDeno({
-            binary: denoBinary,
+          const result = await runNode({
+            binary: nodeBinary,
             code: args.code,
             args: args.args,
             cwd: workdir,
@@ -223,13 +223,13 @@ const Owencode = (async (_input, rawOptions) => {
         },
       }),
 
-      ssh_deno_run: tool({
-        description: "Execute a multiline TypeScript program with full permissions on the configured SSH host after approval. Uses remote deno run --allow-all and sends source directly through SSH stdin without a shell heredoc. The source code itself consumes stdin, so use Deno.args, Deno.readTextFile, fetch, or Deno.Command for additional input.",
-        args: denoToolArgs(),
+      ssh_node_run: tool({
+        description: "Execute a multiline TypeScript program on the configured SSH host after approval. Sends the source through SSH stdin into a temporary .ts file and runs it via remote `node --experimental-strip-types`. Use process.argv, node:fs, fetch, or node:child_process for input/IO.",
+        args: nodeToolArgs(),
         async execute(args, ctx) {
           const workdir = scoped(args.workdir ?? ".")
-          const executionHash = denoExecutionHash(args.code, args.args)
-          await approve(ctx, "ssh_deno_run", `${options.host}:${workdir}:${executionHash}`, {
+          const executionHash = nodeExecutionHash(args.code, args.args)
+          await approve(ctx, "ssh_node_run", `${options.host}:${workdir}:${executionHash}`, {
             host: options.host,
             description: args.description,
             workdir,
@@ -238,7 +238,7 @@ const Owencode = (async (_input, rawOptions) => {
             args: args.args ?? [],
           })
           const timeout = args.timeout ?? 120_000
-          const job = remoteDenoJob(sshDenoBinary, workdir, args.args, timeout)
+          const job = remoteNodeJob(sshNodeBinary, workdir, args.args, timeout)
           let result
           try {
             result = await ssh.run(job.command, {
@@ -250,7 +250,7 @@ const Owencode = (async (_input, rawOptions) => {
             await ssh.run(job.cleanupCommand, { timeout: 10_000 }).catch(() => undefined)
             throw error
           }
-          if (result.exitCode === 124) throw new Error(`SSH Deno operation timed out after ${timeout}ms`)
+          if (result.exitCode === 124) throw new Error(`SSH Node operation timed out after ${timeout}ms`)
           const output = [result.stdout.toString("utf8").trimEnd(), result.stderr.trimEnd()].filter(Boolean).join("\n") || "(no output)"
           return {
             title: `${options.host}: ${args.description}`,

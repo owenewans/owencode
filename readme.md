@@ -6,7 +6,7 @@ opencode extensions by owenewans. local tools, remote machines and github.
 
 <a href="https://count.owenewans.org/owenewans/owencode?theme=moebooru-h&notitle"><img src="https://count.owenewans.org/owenewans/owencode?theme=moebooru-h&notitle" alt="repository views"></a>
 
-`node` `deno` `opencode` `ssh` `github` `camoufox` `playwright`
+`node` `opencode` `ssh` `github` `camoufox` `playwright`
 
 
 </div>
@@ -26,9 +26,9 @@ git tools:
 - `gh` - run parsed github cli command strings with native approvals and no shell
 - `git` - run parsed local git command strings without a shell
 
-deno tools:
-- `deno_run` - execute multiline TypeScript locally with full permissions
-- `ssh_deno_run` - execute the same TypeScript program on the configured SSH host
+node tools:
+- `node_run` - execute multiline TypeScript locally via Node's type stripping
+- `ssh_node_run` - execute the same TypeScript program on the configured SSH host
 
 search tools:
 - `web_search` - query Startpage, DuckDuckGo Lite, Brave Search and Marginalia and merge the results
@@ -57,9 +57,9 @@ the browser mcp launches `camoufox-js` directly and passes its persistent contex
 
 requirements:
 - opencode 1.18.15 or newer
-- node.js 22 or newer
+- node.js 22.6 or newer (for `--experimental-strip-types`, used by `node_run`/`ssh_node_run`)
 - openssh client, git and github cli locally
-- deno locally and on the SSH host when using the corresponding tools
+- node.js locally and on the SSH host when using `node_run`/`ssh_node_run`
 - `tar` locally and on the SSH host for recursive `ssh_transfer`
 - a local socks proxy on `127.0.0.1:1080` for `web_search`, or `searchProxy: false` to go direct
 - xvfb for the default virtual display mode
@@ -115,8 +115,8 @@ add the built plugin to `~/.config/opencode/opencode.json`:
     "ssh_apply_patch": "ask",
     "ssh_transfer": "ask",
     "ssh_tunnel": "ask",
-    "deno_run": "ask",
-    "ssh_deno_run": "ask",
+    "node_run": "ask",
+    "ssh_node_run": "ask",
     "web_search": "allow",
     "git": {
       "*": "ask",
@@ -172,7 +172,7 @@ single files land on a temporary name first; the receiving side compares the sto
 
 `ssh_tunnel` keeps a registry of forwards for the lifetime of the opencode process. tunnels bind `127.0.0.1` unless another address is requested, and `ExitOnForwardFailure` plus `BatchMode` turn a rejected forward into an error rather than a silent no-op. local and dynamic forwards are confirmed by connecting to the bound port before the tool returns; a remote forward binds on the host and cannot be probed from here, so it is reported as unverified. closing a tunnel waits for the process to actually exit and escalates to `SIGKILL` if it ignores `SIGTERM`. tunnel processes are unreferenced so they never keep opencode alive, share opencode's process group so a terminal interrupt reaches them, and an exit hook closes whatever remains. if opencode is killed with `SIGKILL` no cleanup can run and a forward may outlive it. a forward bound beyond loopback is flagged in the approval metadata and in the tool output.
 
-`deno_run` and `ssh_deno_run` execute TypeScript with `--allow-all --allow-scripts --no-prompt --no-lock`. source code is passed through stdin without a heredoc or shell parsing. because stdin contains the source itself, programs should use `Deno.args`, files, `fetch`, or `Deno.Command` for additional input instead of reading `Deno.stdin`.
+`node_run` and `ssh_node_run` execute TypeScript with `node --experimental-strip-types`. the source is written to a temporary `.ts` file and never passed through a shell. programs should use `process.argv`, `node:fs`, `fetch`, or `node:child_process` for input/IO.
 
 `web_search` runs in two modes. `auto` walks the configured engines in order and stops at the first one that answers, which keeps a normal query to a single request. `all` queries every engine in parallel and merges the results, ranking pages that several engines agree on first and keeping the longest available summary. duplicate urls are collapsed after normalising the host, trailing slash and tracking parameters, and duckduckgo redirect links are resolved back to their real targets.
 
@@ -198,8 +198,8 @@ options:
   "root": "/srv/project",
   "sshBinary": "ssh",
   "sshArgs": ["-o", "ConnectTimeout=10"],
-  "denoBinary": "/usr/bin/deno",
-  "sshDenoBinary": "deno",
+  "nodeBinary": "/usr/bin/node",
+  "sshNodeBinary": "node",
   "ghBinary": "gh",
   "gitBinary": "git",
   "tarBinary": "tar",
