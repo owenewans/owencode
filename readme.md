@@ -2,11 +2,11 @@
 
 # owencode
 
-opencode extensions by owenewans. local tools, remote machines and github.
+opencode extensions: local tools, remote machines and github.
 
 <a href="https://count.owenewans.org/owenewans/owencode?theme=moebooru-h&notitle"><img src="https://count.owenewans.org/owenewans/owencode?theme=moebooru-h&notitle" alt="repository views"></a>
 
-`node` `opencode` `ssh` `github` `camoufox` `playwright`
+`typescript` `developer-tools` `cli`
 
 
 </div>
@@ -153,6 +153,15 @@ browser environment:
 - `OWENCODE_BROWSER_HUMANIZE` - `true`, `false` or maximum cursor duration
 - `OWENCODE_BROWSER_CAPABILITIES` - Playwright MCP capabilities
 - `OWENCODE_BROWSER_OUTPUT_DIR` - screenshots, traces and downloads
+- `OWENCODE_BROWSER_TIMEOUT_MS` - Playwright action and navigation deadline, default 30s from the library
+- `OWENCODE_BROWSER_JOB_TIMEOUT_MS` - ceiling for a background job, default 900000
+- `OWENCODE_BROWSER_LOG` - `true` or `false`, appends every tool call to `actions-<date>.jsonl` in the output directory
+
+the browser starts on the first tool call, not when opencode starts, so an idle session puts no window on the screen. closing the window is not fatal: the next call relaunches it, because Playwright's cached backend is dropped first.
+
+work that outlives the client's request timeout belongs in `browser_job_start`, which returns a job id immediately and runs `async (page, { signal }) => ...` in the background. poll it with `browser_job_wait`. long calls also emit progress notifications, which clients that reset their deadline on progress will honour.
+
+`browser_session_status` reports whether the window is up, how many relaunches happened and where the action log lives.
 
 the generated Camoufox identity is stored with mode `0600` inside the profile and reused across restarts. it is regenerated when fingerprint settings or the installed Camoufox version change. proxy credentials should be passed through an environment variable rather than committed to a shared config.
 
