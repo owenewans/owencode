@@ -27,7 +27,7 @@ export type GoalRuntime = {
     sessionID: string
     id: string
     text: string
-    delivery: "queue"
+    delivery: "steer"
     metadata: Record<string, string | number | boolean>
   }): Promise<void>
   synthetic(input: { sessionID: string; text: string }): Promise<void>
@@ -77,8 +77,8 @@ function continuation(state: GoalState): string {
     `[owenloop continuation ${state.turn}]`,
     "Continue autonomously toward the durable goal injected in system context.",
     "Do not stop at a progress report or partial implementation.",
-    "Use owenloop_progress after meaningful verified progress.",
-    "Use owenloop_complete only when the full goal is proven complete, or owenloop_blocked only for a real blocker that prevents further work.",
+    "Use owenloop.progress after meaningful verified progress.",
+    "Use owenloop.complete only when the full goal is proven complete, or owenloop.blocked only for a real blocker that prevents further work.",
   ].join("\n")
 }
 
@@ -132,7 +132,7 @@ export class GoalEngine {
           sessionID: state.sessionID,
           id: pendingID,
           text: continuation(state),
-          delivery: "queue",
+          delivery: "steer",
           metadata: { owenloop: true, turn: state.turn },
         })
         return

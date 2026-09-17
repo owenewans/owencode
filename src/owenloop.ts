@@ -24,10 +24,10 @@ export function createGoalEngine(ctx: Context): GoalEngine {
       await ctx.session.prompt({ ...input, resume: true })
     },
     synthetic: async ({ sessionID, text }) => {
-      await ctx.session.synthetic({ sessionID, text, description: "owenloop", resume: false })
+      await ctx.session.synthetic({ sessionID, text, description: "owenloop", delivery: "steer", resume: true })
     },
     now: () => new Date().toISOString(),
-    id: () => randomUUID(),
+    id: () => `msg_${randomUUID().replaceAll("-", "")}`,
     sleep: (milliseconds) => sleep(milliseconds),
   })
 }

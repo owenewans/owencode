@@ -56,7 +56,7 @@ describe("GoalEngine", () => {
       pendingID: "continuation-1",
     })
     expect(test.prompts).toHaveLength(1)
-    expect(test.prompts[0]).toMatchObject({ sessionID: "session", id: "continuation-1", delivery: "queue" })
+    expect(test.prompts[0]).toMatchObject({ sessionID: "session", id: "continuation-1", delivery: "steer" })
   })
 
   it("continues once for each unique idle event", async () => {

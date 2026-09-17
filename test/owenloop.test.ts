@@ -7,6 +7,7 @@ describe("owenloop V2 plugin", () => {
     const tools: Array<{ name: string; execute(input: unknown, context: unknown): Promise<unknown> }> = []
     const hooks = new Map<string, (event: unknown) => Promise<void>>()
     const namespaces: string[] = []
+    const prompts: Array<{ id: string; delivery: string }> = []
     const storage = new Map<string, unknown>()
     let subscribed = false
     let aborted = false
@@ -42,7 +43,9 @@ describe("owenloop V2 plugin", () => {
         async hook(name: string, hook: (event: unknown) => Promise<void>) {
           hooks.set(name, hook)
         },
-        async prompt() {},
+        async prompt(input: { id: string; delivery: string }) {
+          prompts.push(input)
+        },
         async synthetic() {},
       },
       event: {
@@ -64,6 +67,11 @@ describe("owenloop V2 plugin", () => {
     expect(tools.map((tool) => tool.name)).toEqual(["progress", "complete", "blocked"])
     expect([...hooks.keys()]).toEqual(["context", "compaction"])
     expect(subscribed).toBe(true)
+
+    await commands[0]?.execute({ sessionID: "session", prompt: { text: "finish" } })
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]).toMatchObject({ delivery: "steer" })
+    expect(prompts[0]?.id).toMatch(/^msg_/)
 
     cleanup?.()
     expect(aborted).toBe(true)

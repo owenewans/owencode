@@ -18,4 +18,5 @@ links:
 
 The engine tests cover lifecycle, idle deduplication, retries, recovery, and
 context injection. The plugin test covers V2 command, tool, hook, and event
-registrations; host activation is checked with OpenCode 2.0.5.
+registrations, `msg_` continuation IDs, and steer delivery. Host activation is
+checked with OpenCode 2.0.5 through a real start, complete, and status cycle.
