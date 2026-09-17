@@ -40,6 +40,12 @@ browser mcp:
 - stable fingerprint across restarts
 - virtual display by default with optional headed mode
 
+owenloop for OpenCode 2:
+- durable per-session goals backed by native plugin storage
+- automatic continuation on `session.idle`
+- goal reinjection into normal and compaction model context
+- explicit progress, completion and blocker tools
+
 ## install
 
 Requires:
@@ -76,9 +82,28 @@ The browser starts on the first tool call rather than with opencode, so an
 idle session puts no window on the screen. Closing the window is not fatal;
 the next call relaunches it.
 
+Start a durable goal with `/goal <objective>`. Use `/goal status`, `/goal
+pause`, `/goal resume` and `/goal stop` to control it. The loop continues
+until `owenloop_complete`, `owenloop_blocked` or an explicit stop changes its
+durable state; a service restart resubmits the same fenced continuation.
+
 ## configuration
 
-Add the built plugin to `~/.config/opencode/opencode.json`:
+OpenCode 2 discovers JavaScript entrypoints in
+`~/.config/opencode/plugins/`. Point a thin wrapper at the built owenloop
+entrypoint:
+
+```js
+export { default } from "file:///absolute/path/to/owencode/dist/owenloop.js"
+```
+
+Save it as `~/.config/opencode/plugins/owenloop.js`. If the default permission
+policy asks for every tool, allow `owenloop_progress`, `owenloop_complete` and
+`owenloop_blocked` so the loop does not wait for manual approval to update its
+own state.
+
+The remaining tools use the OpenCode 1 plugin API. Add that built plugin to
+`~/.config/opencode/opencode.json`:
 
 ```json
 {

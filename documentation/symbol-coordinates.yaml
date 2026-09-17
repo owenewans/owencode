@@ -1,0 +1,82 @@
+# symbol-coordinates.yaml
+# GENERATED coordinate artifact — do not edit manually.
+# Run `kibi sync --refresh-symbol-coordinates` to refresh.
+coordinates:
+  SYM-owenloop-blocked:
+    sourceColumn: 8
+    sourceEndColumn: 3
+    sourceEndLine: 259
+    sourceFile: src/loop.ts
+    sourceLine: 249
+  SYM-owenloop-command:
+    sourceColumn: 8
+    sourceEndColumn: 3
+    sourceEndLine: 214
+    sourceFile: src/loop.ts
+    sourceLine: 159
+  SYM-owenloop-complete:
+    sourceColumn: 8
+    sourceEndColumn: 3
+    sourceEndLine: 247
+    sourceFile: src/loop.ts
+    sourceLine: 237
+  SYM-owenloop-create-engine:
+    sourceColumn: 16
+    sourceEndColumn: 1
+    sourceEndLine: 33
+    sourceFile: src/owenloop.ts
+    sourceLine: 18
+  SYM-owenloop-goal-engine:
+    sourceColumn: 13
+    sourceEndColumn: 1
+    sourceEndLine: 287
+    sourceFile: src/loop.ts
+    sourceLine: 98
+  SYM-owenloop-goal-entry:
+    sourceColumn: 12
+    sourceEndColumn: 1
+    sourceEndLine: 20
+    sourceFile: src/loop.ts
+    sourceLine: 17
+  SYM-owenloop-goal-runtime:
+    sourceColumn: 12
+    sourceEndColumn: 1
+    sourceEndLine: 37
+    sourceFile: src/loop.ts
+    sourceLine: 22
+  SYM-owenloop-goal-state:
+    sourceColumn: 12
+    sourceEndColumn: 1
+    sourceEndLine: 15
+    sourceFile: src/loop.ts
+    sourceLine: 3
+  SYM-owenloop-goal-status:
+    sourceColumn: 12
+    sourceEndColumn: 82
+    sourceEndLine: 1
+    sourceFile: src/loop.ts
+    sourceLine: 1
+  SYM-owenloop-idle:
+    sourceColumn: 8
+    sourceEndColumn: 3
+    sourceEndLine: 225
+    sourceFile: src/loop.ts
+    sourceLine: 216
+  SYM-owenloop-progress:
+    sourceColumn: 8
+    sourceEndColumn: 3
+    sourceEndLine: 235
+    sourceFile: src/loop.ts
+    sourceLine: 227
+  SYM-owenloop-recover:
+    sourceColumn: 8
+    sourceEndColumn: 3
+    sourceEndLine: 286
+    sourceFile: src/loop.ts
+    sourceLine: 274
+  SYM-owenloop-system:
+    sourceColumn: 8
+    sourceEndColumn: 3
+    sourceEndLine: 272
+    sourceFile: src/loop.ts
+    sourceLine: 261

@@ -3,4 +3,96 @@
 #   id, title, sourceFile, links, status, tags, owner, priority
 # Generated coordinates are stored separately in symbol-coordinates.yaml.
 # Run `kibi sync --refresh-symbol-coordinates` to refresh them.
-symbols: []
+symbols:
+  - id: SYM-owenloop-goal-status
+    title: GoalStatus
+    sourceFile: src/loop.ts
+    status: active
+    symbol_role: type-shape
+    links:
+      - REQ-OWENCODE-DURABLE-GOALS
+  - id: SYM-owenloop-goal-state
+    title: GoalState
+    sourceFile: src/loop.ts
+    status: active
+    symbol_role: type-shape
+    links:
+      - REQ-OWENCODE-DURABLE-GOALS
+  - id: SYM-owenloop-goal-entry
+    title: GoalEntry
+    sourceFile: src/loop.ts
+    status: active
+    symbol_role: type-shape
+    links:
+      - REQ-OWENCODE-DURABLE-GOALS
+  - id: SYM-owenloop-goal-runtime
+    title: GoalRuntime
+    sourceFile: src/loop.ts
+    status: active
+    symbol_role: type-shape
+    links:
+      - REQ-OWENCODE-DURABLE-GOALS
+  - id: SYM-owenloop-goal-engine
+    title: GoalEngine
+    sourceFile: src/loop.ts
+    status: active
+    symbol_role: type-shape
+    granularity_reason: legacy-link
+    links:
+      - REQ-OWENCODE-DURABLE-GOALS
+  - id: SYM-owenloop-command
+    title: GoalEngine.command
+    sourceFile: src/loop.ts
+    status: active
+    symbol_role: behavioral
+    links:
+      - REQ-OWENCODE-DURABLE-GOALS
+  - id: SYM-owenloop-idle
+    title: GoalEngine.idle
+    sourceFile: src/loop.ts
+    status: active
+    symbol_role: behavioral
+    links:
+      - REQ-OWENCODE-DURABLE-GOALS
+  - id: SYM-owenloop-progress
+    title: GoalEngine.progress
+    sourceFile: src/loop.ts
+    status: active
+    symbol_role: behavioral
+    links:
+      - REQ-OWENCODE-DURABLE-GOALS
+  - id: SYM-owenloop-complete
+    title: GoalEngine.complete
+    sourceFile: src/loop.ts
+    status: active
+    symbol_role: behavioral
+    links:
+      - REQ-OWENCODE-DURABLE-GOALS
+  - id: SYM-owenloop-blocked
+    title: GoalEngine.blocked
+    sourceFile: src/loop.ts
+    status: active
+    symbol_role: behavioral
+    links:
+      - REQ-OWENCODE-DURABLE-GOALS
+  - id: SYM-owenloop-system
+    title: GoalEngine.system
+    sourceFile: src/loop.ts
+    status: active
+    symbol_role: behavioral
+    links:
+      - REQ-OWENCODE-DURABLE-GOALS
+  - id: SYM-owenloop-recover
+    title: GoalEngine.recover
+    sourceFile: src/loop.ts
+    status: active
+    symbol_role: behavioral
+    links:
+      - REQ-OWENCODE-DURABLE-GOALS
+  - id: SYM-owenloop-create-engine
+    title: createGoalEngine
+    sourceFile: src/owenloop.ts
+    status: active
+    symbol_role: behavioral
+    links:
+      - REQ-OWENCODE-DURABLE-GOALS

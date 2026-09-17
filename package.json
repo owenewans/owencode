@@ -7,6 +7,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./owenloop": {
+      "types": "./dist/owenloop.d.ts",
+      "import": "./dist/owenloop.js"
     }
   },
   "bin": {
@@ -44,6 +48,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@opencode-ai/plugin": "^1.18.15",
+    "@opencode/plugin": "2.0.5",
     "@playwright/mcp": "0.0.79",
     "camoufox-js": "0.12.0",
     "cheerio": "^1.1.2",
