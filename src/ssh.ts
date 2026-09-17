@@ -1,8 +1,18 @@
 import { createHash, randomBytes } from "node:crypto"
 import { spawn } from "node:child_process"
 import path from "node:path"
-import type { Options } from "./config.js"
 import { controlArgs, Semaphore } from "./multiplex.js"
+
+export type SshClientOptions = {
+  sshBinary: string
+  sshArgs: string[]
+  host: string
+  port: number
+  maxOutputBytes: number
+  controlMaster: boolean
+  controlPersist: string
+  maxSessions: number
+}
 
 export type RunOptions = {
   input?: string | Buffer
@@ -28,7 +38,7 @@ export function sha256(content: string | Buffer): string {
 export class SshClient {
   private readonly semaphore: Semaphore
 
-  constructor(private readonly options: Options) {
+  constructor(private readonly options: SshClientOptions) {
     this.semaphore = new Semaphore(options.maxSessions)
   }
 
@@ -52,6 +62,7 @@ export class SshClient {
     const limit = options.maxOutputBytes ?? this.options.maxOutputBytes
     const args = [
       ...this.options.sshArgs,
+      ...(this.options.port === 22 ? [] : ["-p", String(this.options.port)]),
       ...controlArgs({
         enabled: this.options.controlMaster,
         persist: this.options.controlPersist,

@@ -25,6 +25,7 @@ function fakeSsh(script: string) {
     sshBinary: "/bin/sh",
     sshArgs: ["-c", script, "owencode-test"],
     host: "ignored",
+    port: 22,
   })
   managers.push(manager)
   return manager

@@ -1,7 +1,7 @@
 import path from "node:path"
 import { createTwoFilesPatch } from "diff"
 import { tool, type Plugin, type ToolContext } from "@opencode-ai/plugin"
-import { parseOptions, remotePath } from "./config.js"
+import { parseOptions, parseRemoteTarget, remotePath, targetArgument, targetLabel, type RemoteTarget } from "./config.js"
 import { nodeExecutionHash, remoteNodeJob, runNode } from "./node.js"
 import { parseGitCommand, renderGitCommand, runGit } from "./git.js"
 import { parseGhCommand, renderGhCommand, runGh } from "./github.js"
@@ -56,38 +56,89 @@ const Owencode = (async (_input, rawOptions) => {
   const nodeBinary = binaryOption(rawOptions, "nodeBinary", "node")
   const sshNodeBinary = binaryOption(rawOptions, "sshNodeBinary", "node")
   const searchSettings = resolveSearchSettings(rawOptions)
-  const ssh = new SshClient(options)
-  const transport: TransferTransport = {
-    sshBinary: options.sshBinary,
-    sshArgs: options.sshArgs,
-    host: options.host,
-    root: options.root,
-    tarBinary,
-    maxTransferBytes: options.maxTransferBytes,
-    multiplex: {
-      enabled: options.controlMaster,
-      persist: options.controlPersist,
-      maxSessions: options.maxSessions,
-    },
-    sessions: ssh.sessions,
+
+  // Each ssh tool takes "user@host" and an optional port per call, so one
+  // plugin instance serves any number of machines. Clients and transports are
+  // created per target and reused for its later calls.
+  type HostBundle = {
+    label: string
+    ssh: SshClient
+    transport: TransferTransport
+    tunnels: TunnelManager
   }
-  const tunnels = new TunnelManager({ sshBinary: options.sshBinary, sshArgs: options.sshArgs, host: options.host })
+
+  const bundles = new Map<string, HostBundle>()
+
+  function bundleFor(target: RemoteTarget): HostBundle {
+    const label = targetLabel(target)
+    const existing = bundles.get(label)
+    if (existing) return existing
+    const destination = targetArgument(target)
+    const ssh = new SshClient({
+      sshBinary: options.sshBinary,
+      sshArgs: options.sshArgs,
+      host: destination,
+      port: target.port,
+      maxOutputBytes: options.maxOutputBytes,
+      controlMaster: options.controlMaster,
+      controlPersist: options.controlPersist,
+      maxSessions: options.maxSessions,
+    })
+    const transport: TransferTransport = {
+      sshBinary: options.sshBinary,
+      sshArgs: options.sshArgs,
+      host: destination,
+      port: target.port,
+      root: options.root,
+      tarBinary,
+      maxTransferBytes: options.maxTransferBytes,
+      multiplex: {
+        enabled: options.controlMaster,
+        persist: options.controlPersist,
+        maxSessions: options.maxSessions,
+      },
+      sessions: ssh.sessions,
+    }
+    const tunnels = new TunnelManager({
+      sshBinary: options.sshBinary,
+      sshArgs: options.sshArgs,
+      host: destination,
+      port: target.port,
+    })
+    const bundle: HostBundle = { label, ssh, transport, tunnels }
+    bundles.set(label, bundle)
+    return bundle
+  }
+
+  function bundleFromArgs(args: { host: string; port?: number }): HostBundle {
+    return bundleFor(parseRemoteTarget(args.host, args.port))
+  }
+
+  function hostToolArgs() {
+    return {
+      host: tool.schema.string().min(3).describe('SSH target as "user@host", for example marou@2.26.179.6'),
+      port: tool.schema.number().int().min(1).max(65535).optional().describe("SSH port, default 22"),
+    }
+  }
+
   const scoped = (value: string) => remotePath(options.root, value)
-  const permissionPath = (value: string) => `${options.host}:${display(options.root, value)}`
+  const permissionPath = (label: string, value: string) => `${label}:${display(options.root, value)}`
 
   return {
     tool: {
       ssh_read: tool({
-        description: "Read a UTF-8 file or list a directory on the configured SSH host. Paths are remote; a relative path resolves against the configured root.",
+        description: "Read a UTF-8 file or list a directory on an SSH host. Paths are remote; a relative path resolves against the configured root.",
         args: {
+          ...hostToolArgs(),
           filePath: tool.schema.string().describe("Absolute remote path, or a path relative to the configured root"),
           offset: tool.schema.number().int().nonnegative().optional().describe("One-based line to start from"),
           limit: tool.schema.number().int().positive().optional().describe("Maximum number of lines, default 2000"),
         },
         async execute(args, ctx) {
+          const bundle = bundleFromArgs(args)
           const filePath = scoped(args.filePath)
-          await approve(ctx, "ssh_read", permissionPath(filePath), { host: options.host, filePath })
-          const result = await ssh.script(
+          await approve(ctx, "ssh_read", permissionPath(bundle.label, filePath), { host: bundle.label, filePath })
+          const result = await bundle.ssh.script(
             [
               'if [ -d "$1" ]; then',
               '  printf "D\\0"',
@@ -106,31 +157,33 @@ const Owencode = (async (_input, rawOptions) => {
           const content = result.stdout.subarray(2).toString("utf8").trimEnd()
           if (type === "D\0") {
             const entries = content
-            return { title: `${options.host}:${display(options.root, filePath)}`, output: entries || "(empty directory)" }
+            return { title: `${bundle.label}:${display(options.root, filePath)}`, output: entries || "(empty directory)" }
           }
           if (type !== "F\0") throw new Error("invalid response from remote read")
           return {
-            title: `${options.host}:${display(options.root, filePath)}`,
+            title: `${bundle.label}:${display(options.root, filePath)}`,
             output: content || "(empty file)",
-            metadata: { host: options.host, filePath },
+            metadata: { host: bundle.label, filePath },
           }
         },
       }),
 
       ssh_glob: tool({
-        description: "Find files by glob on the configured SSH host using remote ripgrep. A relative path resolves against the configured root.",
+        description: "Find files by glob on an SSH host using remote ripgrep. A relative path resolves against the configured root.",
         args: {
+          ...hostToolArgs(),
           pattern: tool.schema.string().min(1).describe("Glob pattern, for example **/*.ts"),
           path: tool.schema.string().optional().describe("Remote directory, defaults to the configured root"),
         },
         async execute(args, ctx) {
+          const bundle = bundleFromArgs(args)
           const base = scoped(args.path ?? ".")
-          const pattern = `${permissionPath(base)}:${args.pattern}`
-          await approve(ctx, "ssh_glob", pattern, { host: options.host, path: base, glob: args.pattern })
+          const pattern = `${permissionPath(bundle.label, base)}:${args.pattern}`
+          await approve(ctx, "ssh_glob", pattern, { host: bundle.label, path: base, glob: args.pattern })
           const script = [
             `cd -- "$1" && command rg --files --hidden -g "$2" -g '!.git' | LC_ALL=C sort`,
           ].join("\n")
-          const result = await ssh.script(script, [base, args.pattern], { signal: ctx.abort })
+          const result = await bundle.ssh.script(script, [base, args.pattern], { signal: ctx.abort })
           if (result.exitCode > 1) throw new Error(result.stderr.trim() || "remote glob failed")
           const files = result.stdout
             .toString("utf8")
@@ -138,55 +191,59 @@ const Owencode = (async (_input, rawOptions) => {
             .split("\n")
             .filter(Boolean)
             .map((item) => path.posix.join(base, item))
-          return { title: `${options.host}: ${args.pattern}`, output: files.join("\n") || "No files found" }
+          return { title: `${bundle.label}: ${args.pattern}`, output: files.join("\n") || "No files found" }
         },
       }),
 
       ssh_grep: tool({
         description: "Search remote file contents with ripgrep. A relative path resolves against the configured root.",
         args: {
+          ...hostToolArgs(),
           pattern: tool.schema.string().min(1).describe("Regular expression to search for"),
           path: tool.schema.string().optional().describe("Remote file or directory, defaults to the configured root"),
           include: tool.schema.string().optional().describe("Optional file glob such as *.ts"),
         },
         async execute(args, ctx) {
+          const bundle = bundleFromArgs(args)
           const target = scoped(args.path ?? ".")
-          const permission = `${permissionPath(target)}:${args.pattern}`
-          await approve(ctx, "ssh_grep", permission, { host: options.host, path: target, pattern: args.pattern })
+          const permission = `${permissionPath(bundle.label, target)}:${args.pattern}`
+          await approve(ctx, "ssh_grep", permission, { host: bundle.label, path: target, pattern: args.pattern })
           const script = [
             `if [ -n "$3" ]; then command rg --line-number --no-heading --color never --hidden -g '!.git' -g "$3" -- "$2" "$1"`,
             `else command rg --line-number --no-heading --color never --hidden -g '!.git' -- "$2" "$1"; fi`,
           ].join("\n")
-          const result = await ssh.script(script, [target, args.pattern, args.include ?? ""], { signal: ctx.abort })
+          const result = await bundle.ssh.script(script, [target, args.pattern, args.include ?? ""], { signal: ctx.abort })
           if (result.exitCode > 1) throw new Error(result.stderr.trim() || "remote grep failed")
-          return { title: `${options.host}: ${args.pattern}`, output: result.stdout.toString("utf8").trimEnd() || "No matches found" }
+          return { title: `${bundle.label}: ${args.pattern}`, output: result.stdout.toString("utf8").trimEnd() || "No matches found" }
         },
       }),
 
       ssh_bash: tool({
-        description: "Execute a non-interactive shell command on the configured SSH host. The working directory defaults to the configured root.",
+        description: "Execute a non-interactive shell command on an SSH host. The working directory defaults to the configured root.",
         args: {
+          ...hostToolArgs(),
           command: tool.schema.string().min(1).describe("Shell command to execute remotely"),
           timeout: tool.schema.number().int().positive().optional().describe("Timeout in milliseconds"),
           workdir: tool.schema.string().optional().describe("Remote working directory, defaults to the configured root"),
         },
         async execute(args, ctx) {
+          const bundle = bundleFromArgs(args)
           const workdir = scoped(args.workdir ?? ".")
-          const pattern = `${options.host}:${args.command}`
-          await approve(ctx, "ssh_bash", pattern, { host: options.host, command: args.command, workdir })
+          const pattern = `${bundle.label}:${args.command}`
+          await approve(ctx, "ssh_bash", pattern, { host: bundle.label, command: args.command, workdir })
           const script = [
             'cd -- "$1" && exec sh -c "$2"',
           ].join("\n")
-          const result = await ssh.script(script, [workdir, args.command], {
+          const result = await bundle.ssh.script(script, [workdir, args.command], {
             signal: ctx.abort,
             timeout: args.timeout,
           })
           const stdout = result.stdout.toString("utf8")
           const output = [stdout.trimEnd(), result.stderr.trimEnd()].filter(Boolean).join("\n") || "(no output)"
           return {
-            title: `${options.host}: ${args.command}`,
+            title: `${bundle.label}: ${args.command}`,
             output,
-            metadata: { host: options.host, workdir, exitCode: result.exitCode },
+            metadata: { host: bundle.label, workdir, exitCode: result.exitCode },
           }
         },
       }),
@@ -224,13 +281,21 @@ const Owencode = (async (_input, rawOptions) => {
       }),
 
       ssh_node_run: tool({
-        description: "Execute a multiline TypeScript program on the configured SSH host after approval. Sends the source through SSH stdin into a temporary .ts file and runs it via remote `node --experimental-strip-types`. Use process.argv, node:fs, fetch, or node:child_process for input/IO.",
-        args: nodeToolArgs(),
+        description: "Execute a multiline TypeScript program on an SSH host after approval. Sends the source through SSH stdin into a temporary .ts file and runs it via remote `node --experimental-strip-types`. Use process.argv, node:fs, fetch, or node:child_process for input/IO.",
+        args: {
+          ...hostToolArgs(),
+          description: tool.schema.string().min(1).describe("Short description of what the TypeScript program does"),
+          code: tool.schema.string().min(1).describe("Complete multiline TypeScript source, run via Node's type-stripping (--experimental-strip-types). Use process.argv, node:fs, fetch, or node:child_process for input/IO"),
+          workdir: tool.schema.string().optional().describe("Working directory, defaults to the current local or remote project directory"),
+          args: tool.schema.array(tool.schema.string()).optional().describe("Arguments exposed to the program via process.argv"),
+          timeout: tool.schema.number().int().positive().optional().describe("Timeout in milliseconds"),
+        },
         async execute(args, ctx) {
+          const bundle = bundleFromArgs(args)
           const workdir = scoped(args.workdir ?? ".")
           const executionHash = nodeExecutionHash(args.code, args.args)
-          await approve(ctx, "ssh_node_run", `${options.host}:${workdir}:${executionHash}`, {
-            host: options.host,
+          await approve(ctx, "ssh_node_run", `${bundle.label}:${workdir}:${executionHash}`, {
+            host: bundle.label,
             description: args.description,
             workdir,
             code: args.code,
@@ -241,51 +306,54 @@ const Owencode = (async (_input, rawOptions) => {
           const job = remoteNodeJob(sshNodeBinary, workdir, args.args, timeout)
           let result
           try {
-            result = await ssh.run(job.command, {
+            result = await bundle.ssh.run(job.command, {
               input: args.code,
               signal: ctx.abort,
               timeout: timeout + 5_000,
             })
           } catch (error) {
-            await ssh.run(job.cleanupCommand, { timeout: 10_000 }).catch(() => undefined)
+            await bundle.ssh.run(job.cleanupCommand, { timeout: 10_000 }).catch(() => undefined)
             throw error
           }
           if (result.exitCode === 124) throw new Error(`SSH Node operation timed out after ${timeout}ms`)
           const output = [result.stdout.toString("utf8").trimEnd(), result.stderr.trimEnd()].filter(Boolean).join("\n") || "(no output)"
           return {
-            title: `${options.host}: ${args.description}`,
+            title: `${bundle.label}: ${args.description}`,
             output,
-            metadata: { host: options.host, workdir, executionHash, exitCode: result.exitCode },
+            metadata: { host: bundle.label, workdir, executionHash, exitCode: result.exitCode },
           }
         },
       }),
 
       ssh_write: tool({
-        description: "Create or replace a UTF-8 file atomically on the configured SSH host.",
+        description: "Create or replace a UTF-8 file atomically on an SSH host.",
         args: {
+          ...hostToolArgs(),
           filePath: tool.schema.string().describe("Absolute remote path, or a path relative to the configured root"),
           content: tool.schema.string().describe("Complete file content"),
         },
         async execute(args, ctx) {
+          const bundle = bundleFromArgs(args)
           const filePath = scoped(args.filePath)
           let oldContent = ""
           let expected = "missing"
           try {
-            oldContent = await ssh.textFile(filePath, ctx.abort)
+            oldContent = await bundle.ssh.textFile(filePath, ctx.abort)
             expected = sha256(oldContent)
           } catch (error) {
             if (!(error instanceof Error) || !error.message.includes("not a regular file")) throw error
           }
           const patch = diff(filePath, oldContent, args.content)
-          await approve(ctx, "ssh_write", permissionPath(filePath), { host: options.host, filePath, diff: patch })
-          await ssh.writeFile(filePath, args.content, expected, ctx.abort)
-          return { title: `${options.host}:${display(options.root, filePath)}`, output: "File written successfully.", metadata: { diff: patch } }
+          await approve(ctx, "ssh_write", permissionPath(bundle.label, filePath), { host: bundle.label, filePath, diff: patch })
+          await bundle.ssh.writeFile(filePath, args.content, expected, ctx.abort)
+          return { title: `${bundle.label}:${display(options.root, filePath)}`, output: "File written successfully.", metadata: { diff: patch } }
         },
       }),
 
       ssh_edit: tool({
-        description: "Replace exact text in a UTF-8 file atomically on the configured SSH host.",
+        description: "Replace exact text in a UTF-8 file atomically on an SSH host.",
         args: {
+          ...hostToolArgs(),
           filePath: tool.schema.string().describe("Absolute remote path, or a path relative to the configured root"),
           oldString: tool.schema.string().describe("Exact text to replace"),
           newString: tool.schema.string().describe("Replacement text"),
@@ -293,8 +361,9 @@ const Owencode = (async (_input, rawOptions) => {
         },
         async execute(args, ctx) {
           if (args.oldString === args.newString) throw new Error("oldString and newString are identical")
+          const bundle = bundleFromArgs(args)
           const filePath = scoped(args.filePath)
-          const oldContent = await ssh.textFile(filePath, ctx.abort)
+          const oldContent = await bundle.ssh.textFile(filePath, ctx.abort)
           const count = oldContent.split(args.oldString).length - 1
           if (count === 0) throw new Error("oldString was not found in the remote file")
           if (!args.replaceAll && count !== 1) throw new Error("oldString occurs multiple times; provide more context or set replaceAll")
@@ -302,18 +371,20 @@ const Owencode = (async (_input, rawOptions) => {
             ? oldContent.replaceAll(args.oldString, args.newString)
             : oldContent.replace(args.oldString, args.newString)
           const patch = diff(filePath, oldContent, newContent)
-          await approve(ctx, "ssh_edit", permissionPath(filePath), { host: options.host, filePath, diff: patch })
-          await ssh.writeFile(filePath, newContent, sha256(oldContent), ctx.abort)
-          return { title: `${options.host}:${display(options.root, filePath)}`, output: "Edit applied successfully.", metadata: { diff: patch } }
+          await approve(ctx, "ssh_edit", permissionPath(bundle.label, filePath), { host: bundle.label, filePath, diff: patch })
+          await bundle.ssh.writeFile(filePath, newContent, sha256(oldContent), ctx.abort)
+          return { title: `${bundle.label}:${display(options.root, filePath)}`, output: "Edit applied successfully.", metadata: { diff: patch } }
         },
       }),
 
       ssh_apply_patch: tool({
-        description: "Apply an OpenCode-style patch to one or more UTF-8 files on the configured SSH host. Supports add, update, move and delete.",
+        description: "Apply an OpenCode-style patch to one or more UTF-8 files on an SSH host. Supports add, update, move and delete.",
         args: {
+          ...hostToolArgs(),
           patchText: tool.schema.string().min(1).describe("Patch enclosed by *** Begin Patch and *** End Patch"),
         },
         async execute(args, ctx) {
+          const bundle = bundleFromArgs(args)
           const operations = parsePatch(args.patchText)
           const changes: Change[] = []
           const touched = new Set<string>()
@@ -329,7 +400,7 @@ const Owencode = (async (_input, rawOptions) => {
               changes.push({ operation, sourcePath, targetPath: sourcePath, oldContent: "", newContent: operation.content, expectedHash: "missing" })
               continue
             }
-            const oldContent = await ssh.textFile(sourcePath, ctx.abort)
+            const oldContent = await bundle.ssh.textFile(sourcePath, ctx.abort)
             if (operation.type === "delete") {
               changes.push({ operation, sourcePath, targetPath: sourcePath, oldContent, newContent: "", expectedHash: sha256(oldContent) })
               continue
@@ -346,33 +417,34 @@ const Owencode = (async (_input, rawOptions) => {
           }
 
           const patches = changes.map((item) => diff(item.targetPath, item.oldContent, item.newContent)).join("\n")
-          const patterns = [...new Set(changes.flatMap((item) => [item.sourcePath, item.targetPath]).map(permissionPath))]
+          const patterns = [...new Set(changes.flatMap((item) => [item.sourcePath, item.targetPath]).map((item) => permissionPath(bundle.label, item)))]
           await ctx.ask({
             permission: "ssh_apply_patch",
             patterns,
             always: patterns,
-            metadata: { host: options.host, files: patterns, diff: patches },
+            metadata: { host: bundle.label, files: patterns, diff: patches },
           })
 
           for (const change of changes) {
             if (change.operation.type === "delete") {
-              await ssh.deleteFile(change.sourcePath, change.expectedHash, ctx.abort)
+              await bundle.ssh.deleteFile(change.sourcePath, change.expectedHash, ctx.abort)
               continue
             }
             const expected = change.operation.type === "add" || change.operation.movePath ? "missing" : change.expectedHash
-            await ssh.writeFile(change.targetPath, change.newContent, expected, ctx.abort)
+            await bundle.ssh.writeFile(change.targetPath, change.newContent, expected, ctx.abort)
             if (change.operation.type === "update" && change.operation.movePath) {
-              await ssh.deleteFile(change.sourcePath, change.expectedHash, ctx.abort)
+              await bundle.ssh.deleteFile(change.sourcePath, change.expectedHash, ctx.abort)
             }
           }
           const summary = changes.map((item) => `${item.operation.type[0].toUpperCase()} ${display(options.root, item.targetPath)}`).join("\n")
-          return { title: `${options.host}: patch applied`, output: `Success. Updated remote files:\n${summary}`, metadata: { diff: patches } }
+          return { title: `${bundle.label}: patch applied`, output: `Success. Updated remote files:\n${summary}`, metadata: { diff: patches } }
         },
       }),
 
       ssh_transfer: tool({
-        description: "Copy files or directories between the local machine and the configured SSH host. Streams raw bytes, so binaries and archives survive intact. A relative remote path resolves against the configured root.",
+        description: "Copy files or directories between the local machine and an SSH host. Streams raw bytes, so binaries and archives survive intact. A relative remote path resolves against the configured root.",
         args: {
+          ...hostToolArgs(),
           direction: tool.schema.enum(["upload", "download"]).describe("upload sends the local path to the host, download fetches the remote path"),
           localPath: tool.schema.string().min(1).describe("Local file or directory path, absolute or relative to the project directory"),
           remotePath: tool.schema.string().min(1).describe("Absolute remote path, or a path relative to the configured root"),
@@ -381,21 +453,22 @@ const Owencode = (async (_input, rawOptions) => {
           timeout: tool.schema.number().int().positive().optional().describe("Timeout in milliseconds"),
         },
         async execute(args, ctx) {
+          const bundle = bundleFromArgs(args)
           const localPath = localTransferPath(ctx.directory, args.localPath)
           const remoteTarget = scoped(args.remotePath)
           const recursive = args.recursive ?? false
           const overwrite = args.overwrite ?? false
           const arrow = args.direction === "upload" ? "->" : "<-"
-          const pattern = `${args.direction}:${localPath}:${permissionPath(remoteTarget)}`
+          const pattern = `${args.direction}:${localPath}:${permissionPath(bundle.label, remoteTarget)}`
           await approve(ctx, "ssh_transfer", pattern, {
-            host: options.host,
+            host: bundle.label,
             direction: args.direction,
             localPath,
             remotePath: remoteTarget,
             recursive,
             overwrite,
           })
-          const result = await transfer(transport, {
+          const result = await transfer(bundle.transport, {
             direction: args.direction,
             localPath,
             remotePath: remoteTarget,
@@ -406,10 +479,10 @@ const Owencode = (async (_input, rawOptions) => {
           })
           const mode = result.mode === undefined ? "" : ` mode ${result.mode.toString(8).padStart(3, "0")}`
           return {
-            title: `${localPath} ${arrow} ${options.host}:${display(options.root, remoteTarget)}`,
+            title: `${localPath} ${arrow} ${bundle.label}:${display(options.root, remoteTarget)}`,
             output: `Transferred ${result.kind} (${result.bytes} bytes)${mode}.`,
             metadata: {
-              host: options.host,
+              host: bundle.label,
               direction: args.direction,
               localPath,
               remotePath: remoteTarget,
@@ -421,8 +494,10 @@ const Owencode = (async (_input, rawOptions) => {
       }),
 
       ssh_tunnel: tool({
-        description: "Open, list and close SSH port forwards to the configured host. Local and dynamic tunnels bind on this machine, remote tunnels bind on the host. Tunnels are tracked and closed when OpenCode exits.",
+        description: "Open, list and close SSH port forwards to SSH hosts. Local and dynamic tunnels bind on this machine, remote tunnels bind on the host. Tunnels are tracked and closed when OpenCode exits.",
         args: {
+          host: tool.schema.string().optional().describe('SSH target as "user@host", required for open'),
+          port: tool.schema.number().int().min(1).max(65535).optional().describe("SSH port, default 22"),
           action: tool.schema.enum(["open", "list", "close"]).describe("Operation to perform"),
           type: tool.schema.enum(["local", "remote", "dynamic"]).optional().describe("Forward type for open: local (-L), remote (-R) or dynamic SOCKS (-D)"),
           bindHost: tool.schema.string().optional().describe("Address the forward listens on, default 127.0.0.1"),
@@ -433,29 +508,36 @@ const Owencode = (async (_input, rawOptions) => {
         },
         async execute(args, ctx) {
           if (args.action === "list") {
-            const records = tunnels.list()
+            const records = [...bundles.values()].flatMap((bundle) =>
+              bundle.tunnels.list().map((record) => ({ ...record, host: bundle.label })),
+            )
             return {
-              title: `${options.host}: ${records.length} tunnel(s)`,
-              output: records.map((item) => describeTunnel(item, options.host)).join("\n") || "No open tunnels",
-              metadata: { host: options.host, tunnels: records },
+              title: records.length === 1 ? `${records[0].host}: 1 tunnel` : `${records.length} tunnel(s)`,
+              output:
+                records.map((record) => describeTunnel(record, record.host)).join("\n") || "No open tunnels",
+              metadata: { tunnels: records },
             }
           }
           if (args.action === "close") {
             const id = args.id
             if (!id) throw new Error("close requires a tunnel id")
-            await approve(ctx, "ssh_tunnel", `close:${options.host}:${id}`, { host: options.host, action: "close", id })
-            if (!(await tunnels.close(id))) throw new Error(`unknown tunnel: ${id}`)
-            return { title: `${options.host}: closed ${id}`, output: `Closed ${id}.`, metadata: { host: options.host, id } }
+            await approve(ctx, "ssh_tunnel", `close:${id}`, { action: "close", id })
+            const owner = [...bundles.values()].find((bundle) => bundle.tunnels.list().some((record) => record.id === id))
+            if (!owner || !(await owner.tunnels.close(id))) throw new Error(`unknown tunnel: ${id}`)
+            return { title: `closed ${id}`, output: `Closed ${id}.`, metadata: { id } }
           }
 
+          const host = args.host
+          if (!host) throw new Error("open requires a host")
+          const bundle = bundleFor(parseRemoteTarget(host, args.port))
           const type = args.type
           if (!type) throw new Error("open requires a tunnel type")
           if (args.bindPort === undefined) throw new Error("open requires a bindPort")
           const bindHost = args.bindHost ?? "127.0.0.1"
           const exposed = !isLoopback(bindHost)
-          const pattern = `open:${options.host}:${type}:${bindHost}:${args.bindPort}`
+          const pattern = `open:${bundle.label}:${type}:${bindHost}:${args.bindPort}`
           await approve(ctx, "ssh_tunnel", pattern, {
-            host: options.host,
+            host: bundle.label,
             action: "open",
             type,
             bindHost,
@@ -464,22 +546,22 @@ const Owencode = (async (_input, rawOptions) => {
             destinationPort: args.destinationPort,
             exposed,
           })
-          const record = await tunnels.open({
+          const record = await bundle.tunnels.open({
             type,
             bindHost,
             bindPort: args.bindPort,
             destinationHost: args.destinationHost,
             destinationPort: args.destinationPort,
           })
-          const network = type === "remote" ? `the network around ${options.host}` : "this machine's network"
+          const network = type === "remote" ? `the network around ${bundle.label}` : "this machine's network"
           const warning = exposed ? `\nThis tunnel is reachable from ${network}, not only from loopback.` : ""
           const unverified = record.verified
             ? ""
             : "\nA remote forward cannot be probed locally, so the listener on the host was not confirmed."
           return {
-            title: `${options.host}: ${record.id}`,
-            output: `Opened ${describeTunnel(record, options.host)}.${warning}${unverified}`,
-            metadata: { host: options.host, ...record },
+            title: `${bundle.label}: ${record.id}`,
+            output: `Opened ${describeTunnel(record, bundle.label)}.${warning}${unverified}`,
+            metadata: { host: bundle.label, ...record },
           }
         },
       }),

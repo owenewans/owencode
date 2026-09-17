@@ -4,3 +4,4 @@ coverage/
 .playwright-mcp/
 *.log
 .DS_Store
+.kb/

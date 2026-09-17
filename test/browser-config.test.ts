@@ -34,7 +34,23 @@ describe("browser configuration", () => {
       humanize: 2.5,
       capabilities: ["core", "network", "storage"],
       outputDir: "/tmp/profile-output",
+      actionTimeout: undefined,
+      jobTimeout: 900_000,
+      log: true,
     })
+  })
+
+  it("reads the long-running timeouts and the action log switch", () => {
+    expect(resolveSettings({}, {
+      OWENCODE_BROWSER_TIMEOUT_MS: "120000",
+      OWENCODE_BROWSER_JOB_TIMEOUT_MS: "1800000",
+      OWENCODE_BROWSER_LOG: "false",
+    })).toMatchObject({ actionTimeout: 120_000, jobTimeout: 1_800_000, log: false })
+  })
+
+  it("rejects non-positive durations instead of silently disabling the ceiling", () => {
+    expect(() => resolveSettings({}, { OWENCODE_BROWSER_JOB_TIMEOUT_MS: "0" })).toThrow("duration")
+    expect(() => resolveSettings({}, { OWENCODE_BROWSER_TIMEOUT_MS: "soon" })).toThrow("duration")
   })
 
   it("enables geoip by default when a proxy is configured", () => {

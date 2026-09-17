@@ -18,7 +18,6 @@ describe("plugin", () => {
     await writeFile(path.join(root, "file.txt"), "hello\n")
     const approvals: Array<{ permission: string; patterns: string[]; always: string[] }> = []
     const hooks = await Owencode({} as never, {
-      host: "ignored",
       root,
       sshBinary: "/bin/sh",
       sshArgs: ["-c", 'exec /bin/sh -c "$2"', "owencode-test"],
@@ -54,10 +53,10 @@ describe("plugin", () => {
       "git",
       "web_search",
     ])
-    const result = await hooks.tool?.ssh_read.execute({ filePath: "file.txt" }, context)
+    const result = await hooks.tool?.ssh_read.execute({ filePath: "file.txt", host: "test@localhost" }, context)
     expect(result).toMatchObject({ output: "1: hello" })
     expect(approvals).toHaveLength(1)
-    expect(approvals[0]).toMatchObject({ permission: "ssh_read", patterns: ["ignored:file.txt"] })
+    expect(approvals[0]).toMatchObject({ permission: "ssh_read", patterns: ["test@localhost:file.txt"] })
 
     await hooks.tool?.gh.execute({ command: "--repo owner/repo pr merge 1" }, context)
     expect(approvals[1]).toMatchObject({

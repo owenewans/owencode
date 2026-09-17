@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import type { Options } from "../src/config.js"
+import type { SshClientOptions } from "../src/ssh.js"
 import { shellQuote, sha256, SshClient } from "../src/ssh.js"
 
 const directories: string[] = []
@@ -12,9 +12,9 @@ afterEach(async () => {
 })
 
 function localClient(root = "/"): SshClient {
-  const options: Options = {
+  const options: SshClientOptions = {
     host: "ignored",
-    root,
+    port: 22,
     sshBinary: "/bin/sh",
     sshArgs: ["-c", 'exec /bin/sh -c "$2"', "owencode-test"],
     maxOutputBytes: 1024 * 1024,

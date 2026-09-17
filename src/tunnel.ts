@@ -24,6 +24,7 @@ export type TunnelTransport = {
   sshBinary: string
   sshArgs: string[]
   host: string
+  port: number
 }
 
 type TunnelEntry = {
@@ -163,6 +164,7 @@ export class TunnelManager {
       this.transport.sshBinary,
       [
         ...this.transport.sshArgs,
+        ...(this.transport.port === 22 ? [] : ["-p", String(this.transport.port)]),
         ...noControlArgs(),
         "-N",
         "-T",

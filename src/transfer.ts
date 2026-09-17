@@ -13,6 +13,7 @@ export type TransferTransport = {
   sshBinary: string
   sshArgs: string[]
   host: string
+  port: number
   root: string
   tarBinary: string
   maxTransferBytes: number
@@ -136,6 +137,7 @@ function spawnStream(options: StreamOptions): Promise<StreamResult> {
       options.transport.sshBinary,
       [
         ...options.transport.sshArgs,
+        ...(options.transport.port === 22 ? [] : ["-p", String(options.transport.port)]),
         ...controlArgs(options.transport.multiplex),
         options.transport.host,
         options.command,

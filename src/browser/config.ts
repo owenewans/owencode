@@ -14,6 +14,13 @@ export type BrowserSettings = {
   humanize: boolean | number
   capabilities?: string[]
   outputDir: string
+  // Playwright's own per-action deadline. Left undefined the library default of
+  // 30s applies, which is short for a humanized browser on a slow site.
+  actionTimeout?: number
+  // Ceiling for a background job. The MCP client's request timeout does not
+  // apply to those, so the ceiling has to come from here.
+  jobTimeout: number
+  log: boolean
 }
 
 type SettingsInput = Partial<BrowserSettings> & {
@@ -36,11 +43,18 @@ function booleanOrNumber(value: string | undefined, fallback: boolean | number):
   throw new Error(`invalid boolean or positive number: ${value}`)
 }
 
-function geoipValue(value: string | undefined, fallback: boolean): boolean {
+function booleanValue(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined) return fallback
   if (value === "true" || value === "1") return true
   if (value === "false" || value === "0") return false
   throw new Error(`invalid boolean: ${value}`)
+}
+
+function milliseconds(value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback
+  const number = Number(value)
+  if (!Number.isFinite(number) || number <= 0) throw new Error(`invalid duration in milliseconds: ${value}`)
+  return number
 }
 
 function list(value: string | string[] | undefined) {
@@ -66,12 +80,19 @@ export function resolveSettings(input: SettingsInput = {}, env = process.env): B
     proxy,
     geoip: env.OWENCODE_BROWSER_GEOIP === undefined
       ? input.geoip ?? Boolean(proxy)
-      : geoipValue(env.OWENCODE_BROWSER_GEOIP, false),
+      : booleanValue(env.OWENCODE_BROWSER_GEOIP, false),
     os: targetOS,
     locale: list(env.OWENCODE_BROWSER_LOCALE ?? input.locale),
     humanize: booleanOrNumber(env.OWENCODE_BROWSER_HUMANIZE, input.humanize ?? true),
     capabilities: list(env.OWENCODE_BROWSER_CAPABILITIES ?? input.capabilities),
     outputDir: outputDirValue ? expandHome(outputDirValue) : `${profile}-output`,
+    actionTimeout: env.OWENCODE_BROWSER_TIMEOUT_MS === undefined
+      ? input.actionTimeout
+      : milliseconds(env.OWENCODE_BROWSER_TIMEOUT_MS, 0),
+    jobTimeout: milliseconds(env.OWENCODE_BROWSER_JOB_TIMEOUT_MS, input.jobTimeout ?? 900_000),
+    log: env.OWENCODE_BROWSER_LOG === undefined
+      ? input.log ?? true
+      : booleanValue(env.OWENCODE_BROWSER_LOG, true),
   }
 }
 

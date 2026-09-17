@@ -1,0 +1,6 @@
+# symbols.yaml
+# AUTHORED fields (edit freely):
+#   id, title, sourceFile, links, status, tags, owner, priority
+# Generated coordinates are stored separately in symbol-coordinates.yaml.
+# Run `kibi sync --refresh-symbol-coordinates` to refresh them.
+symbols: []

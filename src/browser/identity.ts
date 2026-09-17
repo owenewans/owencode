@@ -1,31 +1,15 @@
 import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
-import os from "node:os"
 import path from "node:path"
 import { launchOptions } from "camoufox-js"
 import type { BrowserSettings } from "./config.js"
+import { installedVersion } from "./install.js"
 
 export type Identity = {
   schema: 1
   key: string
   browserVersion: string
   config: Record<string, unknown>
-}
-
-function installDirectory() {
-  return process.env.CAMOUFOX_INSTALL_DIR
-    ? path.resolve(process.env.CAMOUFOX_INSTALL_DIR)
-    : path.join(os.homedir(), ".cache", "camoufox")
-}
-
-async function browserVersion() {
-  const versionPath = path.join(installDirectory(), "version.json")
-  try {
-    const value = JSON.parse(await fs.readFile(versionPath, "utf8")) as { version?: string; release?: string }
-    return `${value.version ?? "unknown"}-${value.release ?? "unknown"}`
-  } catch {
-    throw new Error(`Camoufox is not installed. Run \"npm run browser:fetch\" in the owencode repository.`)
-  }
 }
 
 export type IdentityDependencies = {
@@ -60,7 +44,7 @@ export async function loadOrCreateIdentity(
   dependencies: IdentityDependencies = {},
 ): Promise<Identity> {
   const identityPath = path.join(settings.profile, ".owencode-identity.json")
-  const version = await (dependencies.browserVersion ?? browserVersion)()
+  const version = await (dependencies.browserVersion ?? (() => installedVersion()))()
   const key = settingsKey(settings, version)
   await fs.mkdir(settings.profile, { recursive: true, mode: 0o700 })
   await fs.chmod(settings.profile, 0o700)

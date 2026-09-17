@@ -22,6 +22,7 @@ function transport(root: string, maxTransferBytes = 8 * 1024 * 1024): TransferTr
     sshBinary: "/bin/sh",
     sshArgs: ["-c", 'exec /bin/sh -c "$2"', "owencode-test"],
     host: "ignored",
+    port: 22,
     root,
     tarBinary: "tar",
     maxTransferBytes,

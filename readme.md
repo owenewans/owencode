@@ -62,9 +62,10 @@ npm run browser:fetch
 
 ## usage
 
-The tools appear in opencode once the plugin is registered. `host` is an
-alias from `~/.ssh/config` and `root` is the directory relative paths resolve
-against on that host.
+The tools appear in opencode once the plugin is registered. Every ssh tool
+takes `host` per call as `user@host` with an optional `port` (default 22),
+for example `marou@2.26.179.6`, so one plugin serves any number of machines.
+`root` is the directory relative paths resolve against on every host.
 
 Work that outlives the client's request timeout belongs in
 `browser_job_start`, which returns a job id immediately; poll it with
@@ -86,7 +87,6 @@ Add the built plugin to `~/.config/opencode/opencode.json`:
     [
       "file:///absolute/path/to/owencode/dist/index.js",
       {
-        "host": "dev",
         "root": "/srv/project",
         "ghBinary": "/usr/bin/gh"
       }
@@ -151,7 +151,6 @@ plugin options:
 
 ```json
 {
-  "host": "dev",
   "root": "/srv/project",
   "sshBinary": "ssh",
   "sshArgs": ["-o", "ConnectTimeout=10"],
